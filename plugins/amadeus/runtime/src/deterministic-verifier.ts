@@ -7,9 +7,12 @@ import { resolveMaximumIdleSeconds } from "./worker-timeouts.ts";
 import { prepareWorkspaceIsolationAcceptance } from "./workspace-isolation-acceptance.ts";
 import {
   buildSandboxPipeCheck,
+  changedLanguages,
   discoverVerificationChecks,
   isDirectWorkspaceIntegrityCheck,
   resolveSandboxTestRunner,
+  verificationToolEnvironment,
+  VERIFY_POLICY_PATH,
 } from "./verification-checks.mjs";
 
 export {
@@ -18,6 +21,13 @@ export {
   isDirectWorkspaceIntegrityCheck,
   resolveSandboxTestRunner,
 };
+
+/** Says plainly that only patch integrity was checked, and which changed code went untested. */
+export function integrityOnlySummary(changedPaths: string[] = []): string {
+  const languages = changedLanguages(changedPaths);
+  return "Integrity check only: the patch passed whitespace and integrity checks, but no project tests ran."
+    + (languages.length ? ` Changed ${languages.join(", ")} code was not tested. Declare test commands in ${VERIFY_POLICY_PATH} (Python, Go, .NET) or package.json coordinator.verify (npm).` : "");
+}
 
 export class DeterministicVerifier implements VerificationDriver {
   private readonly options: { config: string; artifactRoot: string; runtimeHomeRoot: string; projectRoot: string;
@@ -61,12 +71,14 @@ export class DeterministicVerifier implements VerificationDriver {
     const outcomes: VerificationReceipt["checks"] = [];
     const raw: Array<Record<string, unknown>> = [];
     try {
-      for (const check of discoverVerificationChecks(workspace, result.patch?.changedPaths)) {
+      // Opt-in test commands come from the authoritative project, not the patched copy.
+      for (const check of discoverVerificationChecks(workspace, result.patch?.changedPaths, { policyRoot: this.options.projectRoot })) {
         context.signal.throwIfAborted();
         context.heartbeat();
         // Strip host Cursor NODE_OPTIONS (--require path-verifier under C:\) so
         // nested Node in the Codex Windows sandbox does not EPERM on lstat('C:\\').
-        const environment: Record<string, string> = { CODEX_HOME: runtimeHome, NODE_OPTIONS: "" };
+        const environment: Record<string, string> = { CODEX_HOME: runtimeHome, NODE_OPTIONS: "",
+          ...verificationToolEnvironment(check.tool, runtimeHome) };
         // Fixed workspace integrity checks (`git diff --check`, workspace-diff-check)
         // run directly: nesting Codex Windows sandbox fails when the parent worker
         // already holds a restricted token. Every other repository-defined check
@@ -80,16 +92,19 @@ export class DeterministicVerifier implements VerificationDriver {
         const execution = await this.execute(directIntegrity ? check.executable : "codex", sandboxedArgs,
           workspace, timeoutSec, context.signal, environment, idleSec);
         const passed = execution.exitCode === 0 && !execution.timedOut && !execution.signal && !execution.error;
-        outcomes.push({ tool: check.tool, command: check.command, exitCode: execution.exitCode, passed });
+        outcomes.push({ tool: check.tool, kind: check.kind, command: check.command, exitCode: execution.exitCode, passed });
         raw.push({ ...check, ...execution });
         if (!passed) break;
       }
       const passed = outcomes.length > 0 && outcomes.every((check) => check.passed);
-      const summary = passed
-        ? `${outcomes.length} independent ordinary-software check${outcomes.length === 1 ? "" : "s"} passed.`
-        : `${outcomes.find((check) => !check.passed)?.command ?? "Verification"} failed; the patch was not applied.`;
-      writeFileSync(evidencePath, JSON.stringify({ schemaVersion: 1, modelInvoked: false, passed, summary, checks: outcomes, executions: raw }, null, 2));
-      return { passed, summary, evidence: [evidencePath], checks: outcomes };
+      const projectTestsRan = outcomes.some((check) => check.kind === "project-tests");
+      const summary = !passed
+        ? `${outcomes.find((check) => !check.passed)?.command ?? "Verification"} failed; the patch was not applied.`
+        : projectTestsRan
+          ? `${outcomes.length} independent ordinary-software check${outcomes.length === 1 ? "" : "s"} passed, including project tests.`
+          : integrityOnlySummary(result.patch?.changedPaths);
+      writeFileSync(evidencePath, JSON.stringify({ schemaVersion: 1, modelInvoked: false, passed, projectTestsRan, summary, checks: outcomes, executions: raw }, null, 2));
+      return { passed, projectTestsRan, summary, evidence: [evidencePath], checks: outcomes };
     } finally {
       rmSync(runtimeHome, { recursive: true, force: true });
     }

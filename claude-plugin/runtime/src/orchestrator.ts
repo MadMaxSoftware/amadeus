@@ -74,9 +74,11 @@ export interface PatchApplicator {
 
 export type VerificationReceipt = {
   passed: boolean;
+  /** False when only patch-integrity checks ran and no project test exercised the change. */
+  projectTestsRan?: boolean;
   summary: string;
   evidence: string[];
-  checks: Array<{ tool: string; command: string; exitCode: number | null; passed: boolean }>;
+  checks: Array<{ tool: string; kind?: "integrity" | "project-tests"; command: string; exitCode: number | null; passed: boolean }>;
 };
 
 export interface VerificationDriver {
@@ -351,7 +353,7 @@ export class Orchestrator {
           });
           this.coordinator.recordAuditNote(jobId, "route_step_completed", JSON.stringify({
             schemaVersion: 1, step: "verify", provider: "software", model: null,
-            financialBasis: "no-model", passed: receipt.passed, summary: receipt.summary,
+            financialBasis: "no-model", passed: receipt.passed, projectTestsRan: receipt.projectTestsRan ?? null, summary: receipt.summary,
             evidence: receipt.evidence, checks: receipt.checks,
           }));
           verificationStepRecorded = true;

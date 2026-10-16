@@ -128,8 +128,9 @@ Balanced-quality policy for ordinary development (see skill guidance and
 - After a diagnosed provider failure, prefer the other available provider for
   the automatic replacement (pinned evaluation routes stay pinned).
 - Universal `git diff --check` (with CR-at-EOL allowed) gates patch integrity;
-  project `package.json` `coordinator.verify` scripts are hard gates only when
-  configured.
+  project `package.json` `coordinator.verify` scripts and `.amadeus/verify.json`
+  runners (pytest, go, dotnet) are hard gates only when configured. A run with
+  no project test is reported as "Integrity check only".
 
 ## Amadeus / Maestro alias
 

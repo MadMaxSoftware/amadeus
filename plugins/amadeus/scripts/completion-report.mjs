@@ -47,6 +47,22 @@ export function recordedHostVerificationCommands(events) {
   });
 }
 
+/**
+ * Whether any recorded check exercised the project, or only patch integrity.
+ * Older records carry no `kind`; their integrity checks are recognised by command.
+ */
+export function verificationDepth(recordedChecks, hostCommands = []) {
+  const isIntegrity = (check) => check.kind ? check.kind === "integrity"
+    : check.command === "git diff --check" || /workspace-diff-check/.test(String(check.command));
+  const all = [...recordedChecks, ...hostCommands.map((command) => ({ command }))];
+  const commands = [...new Set(all.map((check) => check.command))];
+  const functional = all.filter((check) => !isIntegrity(check));
+  if (!all.length) return { status: "not_exercised", summary: "No independent verification result was recorded.", commands };
+  return functional.length
+    ? { status: "pass", summary: "Independent product checks ran in addition to patch-integrity checking.", commands }
+    : { status: "partial", summary: "Integrity check only: patch integrity was verified, but no project tests ran.", commands };
+}
+
 export function comparableCacheShare(input, cached, externalRecords) {
   // Provider records can exclude cached input; Codex input includes it.
   // Preserve raw totals and avoid a false mixed-convention percentage.
@@ -166,13 +182,9 @@ export async function completionAudit(goalId, paths) {
     repeated.length ? `${repeated.length} failed or uncertain subscription attempt(s) were followed by the same model/provider route.` : "No repeated same-route model spend was detected after a failed or uncertain attempt.", repeated));
 
   const verifyEvents = completed.filter(({ detail }) => detail.step === "verify");
-  const verifyCommands = [...verifyEvents.flatMap(({ detail }) => Array.isArray(detail.checks) ? detail.checks.map((item) => item.command).filter(Boolean) : []), ...recordedHostVerificationCommands(allEvents)];
-  const functionalChecks = verifyCommands.filter((command) => command !== "git diff --check");
-  checks.push(auditCheck("verification_depth", verifyCommands.length === 0 ? "not_exercised" : functionalChecks.length ? "pass" : "partial",
-    verifyCommands.length === 0 ? "No independent verification result was recorded."
-      : functionalChecks.length ? "Independent product checks ran in addition to patch-integrity checking."
-        : "Verification covered patch integrity only; no declared product test was recorded.",
-    { commands: [...new Set(verifyCommands)] }));
+  const recordedChecks = verifyEvents.flatMap(({ detail }) => Array.isArray(detail.checks) ? detail.checks.filter((item) => item?.command) : []);
+  const depth = verificationDepth(recordedChecks, recordedHostVerificationCommands(allEvents));
+  checks.push(auditCheck("verification_depth", depth.status, depth.summary, { commands: depth.commands }));
 
   const receipts = snapshot.jobs.flatMap((job) => job.patchReceipts.map((receipt) => ({ job, receipt })));
   const applied = receipts.filter(({ receipt }) => Number(receipt.applied) === 1);

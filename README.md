@@ -34,8 +34,10 @@ software from AI-provider work so users can see how their own work was routed.
   validation, and other deterministic work that does not need another AI call.
 - Routes reasoning and implementation to the lowest capable available signed-in
   provider. Cursor can be used when installed, but it is optional.
-- Works in isolated project copies, verifies generated changes independently,
+- Works in isolated project copies, checks generated changes independently,
   and applies only changes that pass integrity, conflict, and project checks.
+  Every change gets an integrity check; project tests run only where the
+  project declares them (see [Verifying changes](#verifying-changes)).
 - Preserves incomplete and failed work rather than quietly declaring success or
   discarding useful evidence.
 - Reports what was completed, what remains, who did the work, and whether the
@@ -47,6 +49,32 @@ software from AI-provider work so users can see how their own work was routed.
 In practical terms, you can ask for a substantial development or computer-based
 outcome and let Amadeus coordinate the repetitive software work, AI workers,
 verification, recovery, and continuation needed to finish it.
+
+## Verifying changes
+
+Before a worker's change is applied, Amadeus runs checks on the isolated copy
+without calling a model:
+
+- **Always:** a patch-integrity check (whitespace errors and patch shape,
+  `git diff --check`). On its own this does not show that the change works,
+  and the report says "Integrity check only" when nothing else ran.
+- **JavaScript/TypeScript:** changed `*.test.*`/`*.spec.*` files and the tests
+  next to changed source files, plus any npm scripts listed in `package.json`
+  under `coordinator.verify`.
+- **Python, Go and .NET:** opt in with `.amadeus/verify.json` in your project:
+
+  ```json
+  { "schemaVersion": 1, "checks": ["pytest", { "runner": "go", "args": ["./..."] }, { "runner": "dotnet", "args": ["App.sln"] }] }
+  ```
+
+  These run `python -m pytest`, `go test` and `dotnet test` inside the worker
+  sandbox, so the toolchain and the project's dependencies must be reachable
+  from there. They are not automatic because a sandbox that cannot reach a
+  package cache would otherwise block every change. Amadeus reads this file
+  from your project, not from the worker's copy, so a change cannot weaken its
+  own checks.
+
+A configured check that fails blocks the change.
 
 ## Providers and local AI
 

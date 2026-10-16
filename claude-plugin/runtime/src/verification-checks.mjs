@@ -65,13 +65,89 @@ export function isDirectWorkspaceIntegrityCheck(check) {
   return /workspace-diff-check/.test(command);
 }
 
+/** "integrity" checks only whitespace and patch shape; "project-tests" exercise the project. */
+export function verificationCheckKind(check) {
+  if (check?.kind === "integrity" || check?.kind === "project-tests") return check.kind;
+  return isDirectWorkspaceIntegrityCheck(check) ? "integrity" : "project-tests";
+}
+
+export const VERIFY_POLICY_PATH = ".amadeus/verify.json";
+const POLICY_RUNNERS = {
+  pytest: { tool: "pytest", executable: "python", base: ["-m", "pytest", "-q", "-p", "no:cacheprovider"], defaults: [] },
+  go: { tool: "go", executable: "go", base: ["test"], defaults: ["./..."] },
+  dotnet: { tool: "dotnet", executable: "dotnet", base: ["test", "--nologo"], defaults: [] },
+};
+const SAFE_ARGUMENT = /^[A-Za-z0-9_.\/:=@+,-]{1,200}$/;
+
+function policyArgument(value) {
+  const argument = String(value);
+  const parts = argument.replaceAll("\\", "/").split("/");
+  if (!SAFE_ARGUMENT.test(argument) || argument.startsWith("/") || argument.startsWith("\\") || /^[A-Za-z]:/.test(argument)
+    || parts.includes("..")) {
+    throw new Error(`Unsafe argument in ${VERIFY_POLICY_PATH}: ${argument}`);
+  }
+  return argument;
+}
+
+/**
+ * Opt-in project test commands for languages whose toolchains and dependency
+ * caches may not be reachable inside the worker sandbox (Python, Go, .NET).
+ * Read from the authoritative project, never the worker's patched copy, so a
+ * patch cannot weaken its own verification. A configured check that fails or
+ * cannot run blocks the patch, like a `coordinator.verify` npm script.
+ */
+export function readVerifyPolicy(policyRoot) {
+  const file = join(policyRoot, ...VERIFY_POLICY_PATH.split("/"));
+  if (!existsSync(file)) return [];
+  const policy = JSON.parse(readFileSync(file, "utf8"));
+  if (policy?.schemaVersion !== 1 || !Array.isArray(policy.checks) || policy.checks.length > 10) {
+    throw new Error(`${VERIFY_POLICY_PATH} must have schemaVersion 1 and at most 10 checks`);
+  }
+  return policy.checks.map((entry) => {
+    const runner = POLICY_RUNNERS[typeof entry === "string" ? entry : entry?.runner];
+    if (!runner) throw new Error(`Unsupported runner in ${VERIFY_POLICY_PATH}: use pytest, go or dotnet`);
+    const extra = typeof entry === "object" && entry.args !== undefined ? entry.args : runner.defaults;
+    if (!Array.isArray(extra) || extra.length > 20) throw new Error(`${VERIFY_POLICY_PATH} args must be a list of at most 20 values`);
+    const args = [...runner.base, ...extra.map(policyArgument)];
+    return { tool: runner.tool, kind: "project-tests", command: [runner.executable, ...args].join(" "), executable: runner.executable, args };
+  });
+}
+
+/**
+ * Environment a policy runner needs so its caches stay in the per-check runtime home.
+ * @returns {Record<string, string>}
+ */
+export function verificationToolEnvironment(tool, runtimeHome) {
+  if (tool === "go") return { GOCACHE: join(runtimeHome, "go-build"), GOTELEMETRY: "off" };
+  if (tool === "dotnet") return { DOTNET_CLI_HOME: runtimeHome, DOTNET_NOLOGO: "1", DOTNET_CLI_TELEMETRY_OPTOUT: "1",
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1" };
+  if (tool === "pytest") return { PYTHONDONTWRITEBYTECODE: "1" };
+  return {};
+}
+
+const LANGUAGES = [
+  ["JavaScript/TypeScript", /\.(?:[cm]?[jt]sx?)$/i],
+  ["Python", /\.py$/i],
+  ["Go", /\.go$/i],
+  [".NET", /\.(?:cs|fs|vb|csproj|fsproj|vbproj|sln)$/i],
+  ["Rust", /\.rs$/i],
+  ["Java/Kotlin", /\.(?:java|kt|kts)$/i],
+];
+
+/** Languages present among the changed paths, for an honest "not tested" note. */
+export function changedLanguages(changedPaths = []) {
+  const paths = (changedPaths || []).map(String);
+  return LANGUAGES.filter(([, pattern]) => paths.some((path) => pattern.test(path))).map(([name]) => name);
+}
+
 function buildUniversalIntegrityCheck(workspace) {
   const runner = "scripts/workspace-diff-check.mjs";
   if (existsSync(join(workspace, ...runner.split("/")))) {
-    return buildSandboxPipeCheck(runner, process.execPath, workspace);
+    return { ...buildSandboxPipeCheck(runner, process.execPath, workspace), kind: "integrity" };
   }
   return {
     tool: "git",
+    kind: "integrity",
     command: "git diff --check",
     executable: "git",
     args: ["-c", `safe.directory=${workspace}`, "-c", "core.whitespace=cr-at-eol", "diff", "--check", "--", ".", ...EVIDENCE_PATCH_EXCLUDES],
@@ -84,7 +160,7 @@ function buildUniversalIntegrityCheck(workspace) {
  * the project explicitly opts into them through package.json
  * `coordinator.verify`.
  */
-export function discoverVerificationChecks(workspace, changedPaths = []) {
+export function discoverVerificationChecks(workspace, changedPaths = [], options = {}) {
   const checks = [buildUniversalIntegrityCheck(workspace)];
   const seenPipeRunners = new Set(
     checks
@@ -170,5 +246,6 @@ export function discoverVerificationChecks(workspace, changedPaths = []) {
       args: [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "run", name],
     });
   }
-  return checks;
+  checks.push(...readVerifyPolicy(options.policyRoot ?? workspace));
+  return checks.map((check) => ({ ...check, kind: verificationCheckKind(check) }));
 }
