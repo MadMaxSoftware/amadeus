@@ -124,8 +124,8 @@ codex plugin marketplace upgrade amadeus
 ```
 
 Restart Codex / ChatGPT desktop after upgrading. See
-[docs/UPDATE.md](docs/UPDATE.md) for the consent-based update, approval,
-rollback, and restart model.
+[docs/UPDATE.md](docs/UPDATE.md) for consent-based update checks and the
+Claude Code upgrade command.
 
 ## Current release
 

@@ -102,7 +102,6 @@ export class Orchestrator {
   private readonly checkpoint: CheckpointDriver;
   private readonly applicator: PatchApplicator;
   private readonly options: { workerName?: string; leaseSeconds?: number; maximumIdleSeconds?: number; model?: string; maximumChangedFiles?: number | null; maximumChangedLines?: number | null; patchPolicy?: "apply" | "capture-only";
-    expectedIdentity?: { caseId: string; stageRole: "participant" | "assessor"; disallowedCaseIds: string[] };
     verifier?: VerificationDriver;
     routeStep?: { provider: string; model: string | null; reasoningEffort: string; financialBasis: string; reason: string };
     onVerifiedMilestone?: (input: {
@@ -131,7 +130,6 @@ export class Orchestrator {
       maximumChangedFiles?: number | null;
       maximumChangedLines?: number | null;
       patchPolicy?: "apply" | "capture-only";
-      expectedIdentity?: { caseId: string; stageRole: "participant" | "assessor"; disallowedCaseIds: string[] };
       verifier?: VerificationDriver;
       routeStep?: { provider: string; model: string | null; reasoningEffort: string; financialBasis: string; reason: string };
       onVerifiedMilestone?: (input: {
@@ -237,21 +235,6 @@ export class Orchestrator {
           schemaVersion: 1, step: "execute", ...this.options.routeStep, passed: true,
         }));
         primaryStepRecorded = true;
-      }
-      if (this.options.expectedIdentity) {
-        if (!result.goalDecision) throw new Error("Identity-bound stage returned no structured decision");
-        const expected = this.options.expectedIdentity;
-        const statedCase = result.goalDecision.caseId?.toLowerCase();
-        const statedRole = result.goalDecision.stageRole;
-        const decisionText = JSON.stringify({ summary: result.goalDecision.summary, evidence: result.goalDecision.evidence }).toLowerCase();
-        const mentionedSibling = expected.disallowedCaseIds.find((caseId) =>
-          new RegExp(`(^|[^a-z0-9-])${caseId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9-]|$)`, "i").test(decisionText));
-        if (statedCase !== expected.caseId.toLowerCase() || statedRole !== expected.stageRole || mentionedSibling) {
-          const detail = `Identity-bound stage rejected: expected ${expected.caseId}/${expected.stageRole}; received ${statedCase ?? "missing"}/${statedRole ?? "missing"}${mentionedSibling ? `; receipt mentioned sibling ${mentionedSibling}` : ""}. The goal remains unfinished.`;
-          this.coordinator.recordAuditNote(jobId, "identity_mismatch_rejected", detail);
-          this.coordinator.finish(jobId, "failed", detail, result.resultArtifactPath);
-          return this.coordinator.getJob(jobId);
-        }
       }
       if (result.goalDecision?.normalizations?.length) {
         this.coordinator.recordAuditNote(jobId, "goal_decision_normalized", JSON.stringify({

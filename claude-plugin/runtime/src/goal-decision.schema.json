@@ -9,8 +9,6 @@
     "nextStreamObjective": { "type": ["string", "null"] },
     "remainingCriterion": { "type": ["string", "null"] },
     "question": { "type": ["string", "null"] },
-    "caseId": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]{0,40}$" },
-    "stageRole": { "type": ["string", "null"], "enum": ["participant", "assessor", null] },
     "recovery": {
       "description": "MUST be null for continue, complete, and needs_approval. A non-null recovery is permitted only with status=blocked for a technical same-scope repair.",
       "anyOf": [
@@ -38,5 +36,5 @@
       ]
     }
   },
-  "required": ["status", "summary", "evidence", "nextObjective", "nextStreamObjective", "remainingCriterion", "question", "caseId", "stageRole", "recovery", "hostHandoff", "nextRoute"]
+  "required": ["status", "summary", "evidence", "nextObjective", "nextStreamObjective", "remainingCriterion", "question", "recovery", "hostHandoff", "nextRoute"]
 }

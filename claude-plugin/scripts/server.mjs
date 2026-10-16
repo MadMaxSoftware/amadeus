@@ -34,7 +34,6 @@ import {
   recordDiscovery,
   rescanProviders,
   runLifecycleStatus,
-  runStartupLifecycle,
   saveRegistry,
   stableChannelLocalRoutingStatus,
 } from "./amadeus-lifecycle.mjs";
@@ -220,24 +219,6 @@ async function createDefaultGoalPackage(goalId, paths, options = {}) {
   return packagePath;
 }
 
-async function createSpecialGoalPackage(goalId, expectedCaseId, paths) {
-  const packagePath = goalPackagePath(paths.packagesRoot, goalId);
-  if (existsSync(packagePath)) {
-    const existing = await jsonFile(packagePath);
-    if (existing.mode !== "explicit" || !existing.selectedOpaqueCase) {
-      throw new Error("Existing idempotent goal uses a different execution profile");
-    }
-    if (existing.selectedOpaqueCase !== expectedCaseId) throw new Error(`Existing goal package case mismatch: expected ${expectedCaseId}, found ${existing.selectedOpaqueCase}`);
-    return packagePath;
-  }
-  // Public packaged runtime does not ship the legacy host PowerShell package generator
-  // and must not execute scripts from a stale setupRoot. Pre-provisioned packages only.
-  throw new Error(
-    "Cannot create a new opaque-evaluation package from the public Amadeus runtime. "
-      + "Pre-provision the frozen package under the durable state root, or use approved-public-project.",
-  );
-}
-
 function contained(root, candidate, label) {
   const resolvedRoot = resolve(root);
   const resolved = resolve(candidate);
@@ -417,23 +398,13 @@ export function providerExecutionFailed(job) {
 async function promotePreservedCaptureStrategy({ jobId, paths, snapshot, recoveryEvidence }) {
   const goalId = String(snapshot.job.goal_id);
   const stage = inspectGoalExecutionPackage(goalPackagePath(paths.packagesRoot, goalId), goalId,
-    Number(snapshot.job.package_stage_iteration ?? snapshot.job.goal_iteration), true,
-    snapshot.goal.expected_case_id ? String(snapshot.goal.expected_case_id) : null);
+    Number(snapshot.job.package_stage_iteration ?? snapshot.job.goal_iteration), true);
   if (stage.stage.patchPolicy !== "capture-only" || !Array.isArray(stage.stage.allowedWritableWorkspacePaths)) {
     throw new Error("the selected deterministic strategy requires a preserved capture-only stage");
   }
   const receipt = await verifyJobReceipt(jobId, paths, true);
   if (!receipt.trustworthyGoalDecision || receipt.goalDecision.status !== "continue") throw new Error("saved capture has no trustworthy continuation decision");
   const decision = receipt.goalDecision;
-  const expectedCase = stage.selectedOpaqueCase ? String(stage.selectedOpaqueCase).toLowerCase() : null;
-  const decisionText = JSON.stringify({ summary: decision.summary, evidence: decision.evidence }).toLowerCase();
-  const sibling = expectedCase
-    ? stage.allOpaqueCases.filter((caseId) => caseId.toLowerCase() !== expectedCase).find((caseId) =>
-      new RegExp(`(^|[^a-z0-9-])${caseId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9-]|$)`, "i").test(decisionText))
-    : null;
-  if ((expectedCase && decision.caseId?.toLowerCase() !== expectedCase) || decision.stageRole !== stage.stage.role || sibling) {
-    throw new Error(`saved capture identity does not match ${expectedCase ? `${expectedCase}/` : ""}${stage.stage.role}${sibling ? ` and mentions sibling ${sibling}` : ""}`);
-  }
   const patch = captureWorkerPatch(receipt.workspace, stage.stage.allowedWritableWorkspacePaths, paths.artifactRoot, `${jobId}-a${receipt.attempt}`);
   if (!patch) throw new Error("saved workspace contains no capture to recover");
   if (patch.changedFiles > (stage.stage.maximumChangedFiles ?? Infinity) || patch.changedLines > (stage.stage.maximumChangedLines ?? Infinity)) {
@@ -746,16 +717,7 @@ function progressView(coordinator, goalId, paths, includeTechnical = false) {
   const active = activeRunForGoal(paths.database, goalId);
   let stage = "Validation";
   if (view.done) stage = "Complete";
-  else if (currentJob?.status === "running") {
-    const packagePath = goalPackagePath(paths.packagesRoot, goalId);
-    try {
-      const descriptor = JSON.parse(readFileSync(packagePath, "utf8"));
-      const iteration = Number(currentJob.package_stage_iteration ?? currentJob.goal_iteration);
-      const packageStage = descriptor.stages.find((item) => Number(item.iteration) === iteration) ?? descriptor.stages.at(-1);
-      stage = packageStage?.role === "participant" ? "Participant"
-        : packageStage?.role === "assessor" ? "Assessment" : "Validation";
-    } catch { stage = "Validation"; }
-  } else if (currentJob?.status === "queued") stage = active?.alive === true ? "Packaging" : "Queued";
+  else if (currentJob?.status === "queued") stage = active?.alive === true ? "Packaging" : "Queued";
   let maximumIdleSeconds = 0;
   try {
     const workerConfig = JSON.parse(readFileSync(paths.workerConfig, "utf8"));
@@ -1245,7 +1207,6 @@ function toolDefinitions() {
     model: { type: "string", description: "Available subscription model; no artificial Luna-only restriction." },
     reasoningEffort: { type: "string" },
     pinRoute: { type: "boolean", default: false, description: "Set true only when the owner explicitly requested this provider/model route. Omit it for automatic routing." },
-    opaqueCase: { type: "string", enum: ["t26-a", "t26-b", "t26-c", "t27-a", "t27-b"], description: "Required exact frozen case for the T-26/T-27 opaque-evaluation profile." },
   };
   return [
     ...onboardingToolDefinitions(),
@@ -1278,7 +1239,7 @@ function toolDefinitions() {
           doneWhen: { type: "string", minLength: 1 },
           boundaries: { type: "string", minLength: 1 },
           idempotencyKey: { type: "string", minLength: 1, maxLength: 160 },
-          executionProfile: { type: "string", enum: ["approved-public-project", "t26-t27-v3-opaque-evaluation"], default: "approved-public-project" }
+          executionProfile: { type: "string", enum: ["approved-public-project"], default: "approved-public-project" }
         }
       }
     },
@@ -1361,9 +1322,9 @@ function toolDefinitions() {
           idempotencyKey: { type: "string", minLength: 1, maxLength: 160 },
           executionProfile: {
             type: "string",
-            enum: ["approved-public-project", "t26-t27-v3-opaque-evaluation"],
+            enum: ["approved-public-project"],
             default: "approved-public-project",
-            description: "Hash-bound source profile. Use the explicit opaque-evaluation profile only for the frozen T-26/T-27 version-3 milestone."
+            description: "Hash-bound source profile. Only approved-public-project is supported."
           }
         }
       }
@@ -1493,7 +1454,6 @@ export async function callTool(name, rawArguments, paths = productionPaths, back
       constraints: text(args.boundaries, "boundaries"),
       idempotencyKey: args.idempotencyKey,
       executionProfile: args.executionProfile,
-      opaqueCase: args.opaqueCase,
       projectRoot: args.projectRoot, provider: args.provider, model: args.model, reasoningEffort: args.reasoningEffort,
       pinRoute: args.pinRoute === true,
     }, paths);
@@ -1602,30 +1562,26 @@ export async function callTool(name, rawArguments, paths = productionPaths, back
     validateRoutePin(args);
     const executionProfile = args.executionProfile === undefined
       ? "approved-public-project" : text(args.executionProfile, "executionProfile", 80);
-    if (!["approved-public-project", "t26-t27-v3-opaque-evaluation"].includes(executionProfile)) {
+    if (executionProfile !== "approved-public-project") {
       throw new Error("executionProfile is unsupported");
     }
-    if (executionProfile === "approved-public-project") {
-      if (typeof args.projectRoot !== "string" || !args.projectRoot.trim()) {
-        throw new Error("projectRoot is required for ordinary development goals");
-      }
-      if (!isAbsolute(args.projectRoot.trim())) {
-        throw new Error("projectRoot must be an absolute folder path");
-      }
-      const target = guardInstalledPluginTarget(args.projectRoot.trim());
-      if (!target.ok) {
-        const stateRoot = paths?.stateRoot ?? resolveStateRoot({ setupRoot: paths?.setupRoot });
-        const artifact = writeLocalRepairArtifact(stateRoot, {
-          code: target.code,
-          summary: text(args.objective, "objective").slice(0, 2000),
-          successCriteria: text(args.successCriteria, "successCriteria").slice(0, 2000),
-        });
-        throw new Error(`${target.reason} Repair note saved locally: ${artifact.path}`);
-      }
+    if (typeof args.projectRoot !== "string" || !args.projectRoot.trim()) {
+      throw new Error("projectRoot is required for ordinary development goals");
+    }
+    if (!isAbsolute(args.projectRoot.trim())) {
+      throw new Error("projectRoot must be an absolute folder path");
+    }
+    const target = guardInstalledPluginTarget(args.projectRoot.trim());
+    if (!target.ok) {
+      const stateRoot = paths?.stateRoot ?? resolveStateRoot({ setupRoot: paths?.setupRoot });
+      const artifact = writeLocalRepairArtifact(stateRoot, {
+        code: target.code,
+        summary: text(args.objective, "objective").slice(0, 2000),
+        successCriteria: text(args.successCriteria, "successCriteria").slice(0, 2000),
+      });
+      throw new Error(`${target.reason} Repair note saved locally: ${artifact.path}`);
     }
     const result = withCoordinator(paths.database, (c) => {
-      const expectedCaseId = executionProfile === "t26-t27-v3-opaque-evaluation"
-        ? text(args.opaqueCase, "opaqueCase", 40).toLowerCase() : undefined;
       const created = c.createGoal({
         objective: text(args.objective, "objective"),
         successCriteria: text(args.successCriteria, "successCriteria"),
@@ -1636,17 +1592,12 @@ export async function callTool(name, rawArguments, paths = productionPaths, back
           : text(args.idempotencyKey, "idempotencyKey", 160),
         reserveCredits: 1,
         projectRoot: args.projectRoot,
-        expectedCaseId,
       });
       const goal = created.goal;
       if (!created.duplicate && goal.status === "active") c.pauseGoal(String(goal.id));
       return { ...created, ...goalSummary(c, String(goal.id)) };
     });
-    if (executionProfile === "t26-t27-v3-opaque-evaluation") {
-      await createSpecialGoalPackage(String(result.goal.id), String(result.goal.expected_case_id), paths);
-    } else {
-      await createDefaultGoalPackage(String(result.goal.id), paths, args);
-    }
+    await createDefaultGoalPackage(String(result.goal.id), paths, args);
     return {
       ...result,
       executionProfile,
@@ -1749,8 +1700,7 @@ export async function callTool(name, rawArguments, paths = productionPaths, back
     let packageStage = null;
     try {
       if (!snapshot.currentJob) throw new Error("current goal job is unavailable");
-      packageStage = inspectGoalExecutionPackage(packagePath, goalId, Number(snapshot.currentJob.package_stage_iteration ?? snapshot.currentJob.goal_iteration), true,
-        snapshot.goal.expected_case_id ? String(snapshot.goal.expected_case_id) : null);
+      packageStage = inspectGoalExecutionPackage(packagePath, goalId, Number(snapshot.currentJob.package_stage_iteration ?? snapshot.currentJob.goal_iteration), true);
       if (packageStage.stage.handoff) {
         const handoff = packageStage.stage.handoff;
         const previous = withCoordinator(paths.database, (c) => c.getGoalPackageStageJob(goalId, handoff.fromIteration));
@@ -1771,7 +1721,7 @@ export async function callTool(name, rawArguments, paths = productionPaths, back
         blockers.push(`current package stage requires exactly these writable paths: ${expected.join(", ") || "none"}`);
       }
     }
-    if (!development && operations.dispatch?.provider !== "codex-chatgpt-signin") blockers.push("Frozen evaluation uses its original Codex adapter");
+    if (!development && operations.dispatch?.provider !== "codex-chatgpt-signin") blockers.push("Non-development goals run only on the Codex adapter");
     if (operations.dispatch?.windowsSandbox !== "mxc") blockers.push("the reviewed MXC worker sandbox configuration changed");
     if (operations.dispatch?.approvalPolicy !== "never") blockers.push("Unattended workers cannot request interactive approval");
     if (operations.dispatch.provider !== "cursor-browser-login" && worker.windowsSandbox !== "mxc") blockers.push("Codex adapter MXC configuration changed");

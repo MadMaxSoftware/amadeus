@@ -37,8 +37,6 @@ export type GoalDecision = {
   /** A blocked decision that hands an already-authorized step back to the originating host. */
   hostHandoff?: { action: string };
   nextRoute?: { provider: "codex-chatgpt-signin" | "cursor-browser-login" | "claude-subscription-signin"; model: string; reasoningEffort?: string };
-  caseId?: string;
-  stageRole?: "participant" | "assessor";
   /** Parser-added audit facts; never accepted as worker-supplied fields. */
   normalizations?: string[];
 };
@@ -132,6 +130,11 @@ export function parseGoalDecision(raw: string): GoalDecision {
   }
   const record = parsed as Record<string, unknown>;
   const allowed = new Set(["status", "summary", "evidence", "nextObjective", "nextStreamObjective", "remainingCriterion", "question", "recovery", "hostHandoff", "nextRoute", "caseId", "stageRole"]);
+  // caseId and stageRole belonged to a removed evaluation profile. Older receipts
+  // carry them as null; any other value is no longer supported.
+  for (const legacy of ["caseId", "stageRole"]) {
+    if (record[legacy] !== undefined && record[legacy] !== null) throw new Error(`Goal decision field ${legacy} is no longer supported`);
+  }
   const extra = Object.keys(record).filter((key) => !allowed.has(key));
   if (extra.length) throw new Error(`Goal decision has unsupported fields: ${extra.join(", ")}`);
   if (!(["continue", "complete", "needs_approval", "blocked"] as unknown[]).includes(record.status)) {
@@ -186,20 +189,9 @@ export function parseGoalDecision(raw: string): GoalDecision {
     nextRoute = { provider: route.provider as NonNullable<GoalDecision["nextRoute"]>["provider"], model: requiredText(route.model, "nextRoute.model"),
       ...(route.reasoningEffort ? { reasoningEffort: requiredText(route.reasoningEffort, "nextRoute.reasoningEffort") } : {}) };
   }
-  const caseId = record.caseId === undefined || record.caseId === null
-    ? undefined : requiredText(record.caseId, "caseId").toLowerCase();
-  if (caseId !== undefined && !/^[a-z][a-z0-9-]{0,40}$/.test(caseId)) {
-    throw new Error("caseId must be a stable lower-case identifier");
-  }
-  const stageRole = record.stageRole === undefined || record.stageRole === null
-    ? undefined : requiredText(record.stageRole, "stageRole");
-  if (stageRole !== undefined && !["participant", "assessor"].includes(stageRole)) {
-    throw new Error("stageRole must be participant or assessor");
-  }
   return { status, summary: requiredText(record.summary, "summary"), evidence, nextObjective, nextStreamObjective, question,
     ...(status === "continue" && remainingCriterion ? { remainingCriterion } : {}), ...(recovery ? { recovery } : {}), ...(hostHandoff ? { hostHandoff } : {}), ...(nextRoute ? { nextRoute } : {}),
-    ...(normalizations.length ? { normalizations } : {}),
-    ...(caseId ? { caseId } : {}), ...(stageRole ? { stageRole: stageRole as "participant" | "assessor" } : {}) };
+    ...(normalizations.length ? { normalizations } : {}) };
 }
 
 export function formatGoalIterationObjective(input: {
@@ -230,7 +222,7 @@ export function formatGoalIterationObjective(input: {
     ...(input.continuousDevelopment ? [LONG_HAUL_AUTH_RECOVERY, STANDING_PROJECT_AUTHORITY] : []),
     ...(input.continuousDevelopment ? ["If the next remaining work is an already-authorized ordinary-software or browser operation assigned to the origin host, return blocked with hostHandoff={\"action\":\"the exact host-side operation to perform\"}, nextObjective=null, nextStreamObjective=null, question=null and recovery=null, and list the supporting artifacts in evidence. This ends only the isolated worker, not the authorized project stream: the origin coordinator must record the verified terminal worker result, execute the covered host operations, record authoritative evidence and continue. Do not enqueue another model iteration to prepare or repeat the same host handoff. Do not copy host credentials or perform an operation explicitly reserved to the origin while it is executing there. A connected native provider tool receipt corroborated by authoritative service/database evidence can meet a roadmap criterion; do not invent a mandatory token-extraction script artifact when the approved roadmap permits that native route."] : []),
     "Your final response must be exactly one JSON object with no surrounding prose. The recovery field is valid only when status=blocked for a technical same-scope repair; it MUST be null when status=continue, complete, or needs_approval. A continue decision already carries its next bounded work in nextObjective and must never duplicate that work in recovery:",
-    "Use ordinary software for deterministic work (searches, tests, builds, transformations) inside this same iteration instead of spending another model turn merely to run a check. A continue decision is valid only when a specific success criterion is still unmet: copy that exact evidence gap into remainingCriterion and make nextObjective the coherent implementation-and-verification milestone that closes it. Never return a vague 'review the next relationship' continuation. Included subscription allowance has no coordinator spending ceiling. Use an inexpensive suitable model first; when the next step needs another available subscription model/provider, add nextRoute: {provider: codex-chatgpt-signin, cursor-browser-login, or claude-subscription-signin, model: available model name, reasoningEffort: supported effort}. Do not change providers for frozen participant/assessor work. Never invent model availability or mark unfinished work complete.",
-    '{"status":"continue|complete|needs_approval|blocked","summary":"what was established","evidence":["specific check or artifact"],"nextObjective":"required only for continue","nextStreamObjective":"only for status complete with another roadmap milestone; otherwise null","remainingCriterion":"exact unmet success-criterion evidence gap; required only for continue","question":"required only for needs_approval","caseId":null,"stageRole":null,"recovery":null,"hostHandoff":null,"nextRoute":null}',
+    "Use ordinary software for deterministic work (searches, tests, builds, transformations) inside this same iteration instead of spending another model turn merely to run a check. A continue decision is valid only when a specific success criterion is still unmet: copy that exact evidence gap into remainingCriterion and make nextObjective the coherent implementation-and-verification milestone that closes it. Never return a vague 'review the next relationship' continuation. Included subscription allowance has no coordinator spending ceiling. Use an inexpensive suitable model first; when the next step needs another available subscription model/provider, add nextRoute: {provider: codex-chatgpt-signin, cursor-browser-login, or claude-subscription-signin, model: available model name, reasoningEffort: supported effort}. Do not change providers on a route the owner pinned. Never invent model availability or mark unfinished work complete.",
+    '{"status":"continue|complete|needs_approval|blocked","summary":"what was established","evidence":["specific check or artifact"],"nextObjective":"required only for continue","nextStreamObjective":"only for status complete with another roadmap milestone; otherwise null","remainingCriterion":"exact unmet success-criterion evidence gap; required only for continue","question":"required only for needs_approval","recovery":null,"hostHandoff":null,"nextRoute":null}',
   ].join("\n\n");
 }

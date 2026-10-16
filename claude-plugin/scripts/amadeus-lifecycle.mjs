@@ -15,11 +15,6 @@ import {
   defaultConsent,
   MARKETPLACE_UPGRADE_COMMAND,
   marketplaceUpgradeCommandFor,
-  stageUpdate,
-  approveActivation,
-  rollbackUpdate,
-  invokeMarketplaceUpgradeGuidance,
-  startupUpdateCheck,
 } from "./update-manager.mjs";
 import {
   defaultDiscoveryPaths,
@@ -83,7 +78,7 @@ export function defaultPluginRoot(metaUrl = import.meta.url) {
 
 /**
  * Read-only lifecycle status for MCP/status tools. Never probes, checks
- * releases, or writes state. Startup update checks use runStartupLifecycle.
+ * releases, or writes state. Update checks run only through amadeus_check_updates.
  */
 export async function runLifecycleStatus(input = {}) {
   const stateRoot = input.stateRoot;
@@ -109,7 +104,7 @@ export async function runLifecycleStatus(input = {}) {
       ok: true,
       status: "not-checked",
       checked: false,
-      reason: "Status is read-only. Consented startup/24h checks and amadeus_check_updates contact GitHub; this status tool does not.",
+      reason: "Status is read-only. Only amadeus_check_updates contacts GitHub, at most once per 24 hours unless forced; this status tool does not.",
     };
   } else {
     updates = {
@@ -145,86 +140,11 @@ export async function runLifecycleStatus(input = {}) {
   };
 }
 
-/**
- * Consented startup lifecycle: optional MadMaxSoftware/amadeus update check
- * under the established startup + 24-hour cache policy. Never activates updates.
- * Does not run provider discovery or inventory collection.
- */
-export async function runStartupLifecycle(input = {}) {
-  const stateRoot = input.stateRoot;
-  if (!stateRoot) {
-    return {
-      ok: false,
-      reason: "stateRoot required for lifecycle state.",
-      updates: null,
-      providers: null,
-      localRouting: stableChannelLocalRoutingStatus(),
-    };
-  }
-  const updatePaths = defaultUpdatePaths(stateRoot);
-  const discoveryPaths = defaultDiscoveryPaths(stateRoot);
-  const registryPath = defaultRegistryPath(stateRoot);
-  const pluginRoot = input.pluginRoot ?? defaultPluginRoot();
-  const currentVersion = input.currentVersion ?? readPluginVersion(pluginRoot) ?? "0.0.0";
-
-  const updateConsent = loadJson(updatePaths.consentPath, defaultConsent());
-  let updates = null;
-  if (hasUpdateConsent(updateConsent)) {
-    updates = await startupUpdateCheck({
-      stateRoot,
-      paths: updatePaths,
-      consent: updateConsent,
-      currentVersion,
-      fetchLatestRelease: input.fetchLatestRelease,
-      force: Boolean(input.forceUpdateCheck),
-      now: input.now,
-    });
-  } else {
-    updates = {
-      ok: false,
-      status: "consent-required",
-      checked: false,
-      reason: "Update checks require explicit owner consent.",
-      marketplaceUpgradeCommand: MARKETPLACE_UPGRADE_COMMAND,
-    };
-  }
-
-  // Migrate registry on startup without scanning.
-  const registry = migrateRegistry(loadRegistry(registryPath));
-  if (input.persistRegistry !== false) {
-    saveRegistry(registryPath, registry);
-  }
-
-  return {
-    ok: true,
-    currentVersion,
-    updates,
-    providers: {
-      discoveryConsent: hasDiscoveryConsent(loadDiscoveryJson(discoveryPaths.consentPath, defaultDiscoveryConsent())),
-      registryPath,
-      providerCount: Object.keys(registry.providers).length,
-      routableOnStable: listRoutableProviders(registry, {
-        requirePilotGate: true,
-        pilotGateOpen: isLocalModelPilotGateOpen({ releaseChannel: "stable" }),
-      }).length,
-    },
-    localRouting: stableChannelLocalRoutingStatus(),
-    pilotGate: {
-      ...PILOT_GATE,
-      open: isLocalModelPilotGateOpen(input.pilotGate || { releaseChannel: "stable" }),
-    },
-  };
-}
-
 export {
   checkForUpdate,
   grantUpdateConsent,
   declineUpdateConsent,
   hasUpdateConsent,
-  stageUpdate,
-  approveActivation,
-  rollbackUpdate,
-  invokeMarketplaceUpgradeGuidance,
   MARKETPLACE_UPGRADE_COMMAND,
   marketplaceUpgradeCommandFor,
   defaultUpdatePaths,
@@ -250,6 +170,5 @@ export {
   planRouteWithLocalModels,
   isLocalModelPilotGateOpen,
   stableChannelLocalRoutingStatus,
-  startupUpdateCheck,
   PILOT_GATE,
 };

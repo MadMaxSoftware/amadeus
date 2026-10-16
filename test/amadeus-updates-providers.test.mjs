@@ -135,57 +135,14 @@ test("update check: newer/equal/older/unavailable/malformed and 24h interval", a
   assert.equal(malformed.status, "malformed");
 });
 
-test("stage/approve/rollback with pending-restart and no hot replacement; partial rejected", () => {
-  const stateRoot = tempState();
-  const paths = update.defaultUpdatePaths(stateRoot);
-  const release = {
-    version: "0.3.1",
-    tag: "0.3.1",
-    repo: "MadMaxSoftware/amadeus",
-    name: "0.3.1",
-    body: "notes",
-  };
-  const partial = update.stageUpdate({
-    paths,
-    release,
-    files: [{ path: "README.md", content: "hi\n" }],
-  });
-  assert.equal(partial.status, "partial");
-
-  const pluginJson = JSON.stringify({
-    name: "amadeus",
-    version: "0.3.1+amadeus.20261013010000",
-  }, null, 2);
-  const staged = update.stageUpdate({
-    paths,
-    release,
-    files: [
-      { path: "plugins/amadeus/.codex-plugin/plugin.json", content: `${pluginJson}\n` },
-      { path: "package.json", content: "{\"version\":\"0.3.1\"}\n" },
-    ],
-  });
-  assert.equal(staged.status, "staged");
-
-  const denied = update.approveActivation({ paths, approval: false });
-  assert.equal(denied.status, "approval-required");
-
-  const approved = update.approveActivation({
-    paths,
-    approval: true,
-    currentVersion: "0.3.0",
-    currentFiles: [
-      { path: "plugins/amadeus/.codex-plugin/plugin.json", content: "{\"version\":\"0.3.0\"}\n" },
-    ],
-  });
-  assert.equal(approved.status, "pending-restart");
-  assert.equal(approved.pendingRestart.hotReplacement, false);
-  assert.match(approved.pendingRestart.marketplaceUpgradeCommand, /marketplace upgrade amadeus/);
-  assert.equal(approved.rollbackPreserved, true);
-
-  const rolled = update.rollbackUpdate({ paths, targetDir: join(stateRoot, "restored") });
-  assert.equal(rolled.status, "rolled-back");
-  assert.equal(rolled.restoredVersion, "0.3.0");
-  assert.ok(existsSync(join(stateRoot, "restored", "plugins", "amadeus", ".codex-plugin", "plugin.json")));
+test("updates are check-only: no staging, activation or rollback code ships", () => {
+  for (const removed of ["stageUpdate", "approveActivation", "rollbackUpdate", "startupUpdateCheck", "invokeMarketplaceUpgradeGuidance"]) {
+    assert.equal(update[removed], undefined, `${removed} must not exist`);
+    assert.equal(lifecycle[removed], undefined, `${removed} must not be re-exported`);
+  }
+  assert.equal(lifecycle.runStartupLifecycle, undefined);
+  const paths = update.defaultUpdatePaths(tempState());
+  assert.deepEqual(Object.keys(paths).sort(), ["consentPath", "root", "statePath"]);
 });
 
 test("provider discovery: declined consent, no LAN, loopback-only, manual endpoint", async () => {
@@ -405,11 +362,7 @@ test("config migration and lifecycle startup privacy defaults", async () => {
   assert.equal(written.runtimeAuthority, "packaged");
   assert.ok(written.lifecycle.providerRegistry.includes("providers"));
 
-  const boot = await lifecycle.runStartupLifecycle({
-    stateRoot,
-    currentVersion: "0.3.0",
-    fetchLatestRelease: async () => ({ tag_name: "0.3.1" }),
-  });
+  const boot = await lifecycle.runLifecycleStatus({ stateRoot, currentVersion: "0.3.0" });
   assert.equal(boot.updates.status, "consent-required");
   assert.equal(boot.localRouting.localAutomaticRouting, false);
   assert.equal(boot.pilotGate.open, false);

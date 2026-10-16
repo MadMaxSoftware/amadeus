@@ -1,39 +1,48 @@
 # Update Amadeus
 
-Amadeus 0.3.x supports **consent-based** update checking against
-`MadMaxSoftware/amadeus` only. After consent, Amadeus may check on **startup**
-and again when the **24-hour** cache window has elapsed. Explicit
-`amadeus_check_updates` uses the same policy. Read-only
-`amadeus_lifecycle_status` never contacts GitHub. Newer releases show metadata;
-**activation requires explicit approval**. Amadeus never hot-replaces a running
-plugin: approved updates leave a pending-restart state. Rollback snapshots are
-preserved when activation is approved.
+Amadeus can tell you when a newer release exists. It never downloads,
+installs or activates anything itself: you upgrade through your host's own
+plugin command, then restart the host.
 
-## Update (recommended)
+## Checking for updates
+
+Update checks are off until you consent, and they contact only the GitHub
+releases of `MadMaxSoftware/amadeus`.
+
+1. Grant consent with `amadeus_update_consent` (`consent=true`). Declining or
+   revoking consent stops all release queries. Consent is stored per machine in
+   `updates/consent.json` under the Amadeus state root.
+2. Ask for a check with `amadeus_check_updates`. Amadeus checks at most once per
+   24 hours; a `force` check ignores that window. Nothing checks automatically
+   when a chat opens or the host starts.
+3. The result shows the installed and latest versions, the release notes link,
+   and the upgrade command for the host you are running.
+
+`amadeus_lifecycle_status` is read-only and never contacts GitHub.
+
+Malformed, unavailable, older and equal releases are reported as such and change
+nothing.
+
+## Upgrading
+
+Codex / ChatGPT desktop:
 
 ```bash
 codex plugin marketplace upgrade amadeus
 ```
 
-Restart Codex / ChatGPT desktop so it reloads the plugin cache. Confirm the
-installed cache version matches `plugins/amadeus/.codex-plugin/plugin.json`.
+Claude Code:
 
-## Consent and staged activation (development / owner tools)
+```bash
+claude plugin update amadeus@amadeus
+```
 
-1. Grant update-check consent (`amadeus_update_consent` with `consent=true`, or
-   write the per-machine consent file under the Amadeus state root
-   `updates/consent.json`). Declining consent skips all remote checks.
-2. After consent, startup and `amadeus_check_updates` may query only
-   `MadMaxSoftware/amadeus` (subject to the 24-hour window). Lifecycle status
-   remains read-only and does not contact GitHub.
-3. Review owner-visible release metadata (version, notes, URL).
-4. Stage and approve activation explicitly when a newer release should be
-   applied. This writes pending-restart guidance and preserves rollback state.
-5. Invoke the marketplace upgrade command above, then restart the desktop host.
-6. Use rollback only to restore a preserved prior snapshot if needed.
+Restart the host afterwards so it reloads the plugin. Amadeus never replaces a
+running plugin. Your goals and other state live outside the plugin folder and
+are kept across upgrades; the state database is backed up daily.
 
-Malformed, unavailable, older, equal, partial, and declined-consent cases do not
-activate an update.
+Your host's plugin manager decides how to go back to an earlier version.
+Amadeus itself keeps no staged copies or rollback snapshots.
 
 ## Optional local checkout update
 

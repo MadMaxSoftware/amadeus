@@ -78,9 +78,8 @@ inventory commands. A user instruction not to scan takes precedence.
 ## Updates and local providers (0.3.x)
 
 - Update checks against `MadMaxSoftware/amadeus` require explicit consent
-  (`amadeus_update_consent`). Newer releases need separate activation approval;
-  never hot-replace — guide marketplace upgrade + desktop restart
-  (`docs/UPDATE.md`).
+  (`amadeus_update_consent`). Amadeus only reports a newer release; never
+  hot-replace — guide the host's upgrade command + restart (`docs/UPDATE.md`).
 - Computer-only provider discovery requires separate consent
   (`amadeus_provider_discovery_consent`). Never scan LAN. Detection alone grants
   no routing authority; approve each provider before enable, then qualify.
@@ -270,15 +269,9 @@ inventory commands. A user instruction not to scan takes precedence.
   external blocker remains. Do not end merely because one milestone, phase, or
   test passed. This does not apply when the owner explicitly requested only one
   bounded task, review, or preparation step.
-- Use the special `t26-t27-v3-opaque-evaluation` profile only for the frozen
-  22 September version-3 T-26/T-27 participant-plus-assessor milestone. Pass
-  its exact selected `opaqueCase`; never let packaging choose or infer a case
-  from the goal ID. Use `approved-public-project` otherwise.
 - Ordinary development has project-wide write access in its working copy by
   default. No arbitrary file/line count or duration ceiling. Pass narrower
-  writable paths only when the user asks for a narrower task. Frozen evaluation
-  packages retain their participant/assessor separation; these are not the
-  template for normal development.
+  writable paths only when the user asks for a narrower task.
 
 ## Planned-scope authentication recovery
 
@@ -327,9 +320,8 @@ For continuous-development or Long-Haul Autopilot, routine authentication recove
   provider failure, the corrected automatic replacement must use the other
   available provider rather than retrying the same route; an explicit pinned
   evaluation route remains pinned.
-- Participant and assessor work remain separate. A failed participant
-  replacement stays at the participant stage; only verified participant output
-  can advance to assessment.
+- In a multi-stage goal package, a failed replacement stays at its own stage;
+  only verified output from one stage can advance to the next.
 
 ## Operating behaviour
 

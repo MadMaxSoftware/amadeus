@@ -9,7 +9,8 @@ import { onboardingStatus, recordDiscoveryChoice, configureRuntime, setupPackage
   isMigratableCursorConfig } from "../plugins/amadeus/scripts/privacy-onboarding.mjs";
 import { detectAccelerators } from "../plugins/amadeus/scripts/amadeus-runtime.mjs";
 import { discoverProviders, probeTarget, defaultDiscoveryPaths, grantDiscoveryConsent, hasDiscoveryConsent } from "../plugins/amadeus/scripts/provider-discovery.mjs";
-import { runLifecycleStatus, runStartupLifecycle } from "../plugins/amadeus/scripts/amadeus-lifecycle.mjs";
+import { runLifecycleStatus } from "../plugins/amadeus/scripts/amadeus-lifecycle.mjs";
+import { checkForUpdate } from "../plugins/amadeus/scripts/update-manager.mjs";
 import { readModelCatalog } from "../src/model-catalog.ts";
 import { inspectCursorCli } from "../src/cursor-adapter.ts";
 
@@ -212,26 +213,24 @@ test("lifecycle status never writes state or invokes update transport", async ()
   assert.equal(existsSync(join(f.stateRoot, "providers")), false);
 });
 
-test("consented startup lifecycle may check updates under the 24-hour policy", async () => {
+test("a consented update check runs at most once per 24 hours", async () => {
   const f = fixture();
   mkdirSync(join(f.stateRoot, "updates"), { recursive: true });
   writeFileSync(join(f.stateRoot, "updates", "consent.json"), JSON.stringify({ updateChecks: true }));
   let calls = 0;
-  const boot = await runStartupLifecycle({
+  const boot = await checkForUpdate({
     stateRoot: f.stateRoot,
     currentVersion: "0.3.1",
-    persistRegistry: false,
     fetchLatestRelease: async () => { calls++; return { tag_name: "v0.3.2", html_url: "https://github.com/MadMaxSoftware/amadeus/releases/tag/v0.3.2", published_at: "2026-10-13T00:00:00Z", body: "n" }; },
   });
   assert.equal(calls, 1);
-  assert.equal(boot.updates.checked, true);
-  const skipped = await runStartupLifecycle({
+  assert.equal(boot.checked, true);
+  const skipped = await checkForUpdate({
     stateRoot: f.stateRoot,
     currentVersion: "0.3.1",
-    persistRegistry: false,
     fetchLatestRelease: never,
   });
-  assert.equal(skipped.updates.status, "skipped-interval");
+  assert.equal(skipped.status, "skipped-interval");
 });
 
 test("cached model catalog remains usable with optional discovery disabled", () => {

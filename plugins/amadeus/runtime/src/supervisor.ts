@@ -264,13 +264,6 @@ function main(): Promise<void> {
             return result;
           },
         } : {}),
-        ...(stage?.selectedOpaqueCase && (stage.stage.role === "participant" || stage.stage.role === "assessor") ? {
-          expectedIdentity: {
-            caseId: stage.selectedOpaqueCase,
-            stageRole: stage.stage.role,
-            disallowedCaseIds: stage.allOpaqueCases.filter((caseId) => caseId !== stage.selectedOpaqueCase),
-          },
-        } : {}),
       },
     );
   }
@@ -311,10 +304,6 @@ function main(): Promise<void> {
       const lastJob = await runGoalStages({ coordinator, goalId, packagePath,
         writablePaths: normalizedWritePaths(worker.writableWorkspacePaths),
         async runStage(stage, writableWorkspacePaths) {
-          const expectedCaseId = coordinator.getGoal(goalId).expected_case_id;
-          if (expectedCaseId && stage.selectedOpaqueCase?.toLowerCase() !== String(expectedCaseId).toLowerCase()) {
-            throw new Error(`Goal package case mismatch: expected ${expectedCaseId}, found ${stage.selectedOpaqueCase ?? "none"}`);
-          }
           const temporaryRoot = mkdtempSync(join(tmpdir(), "amadeus-worker-stage-"));
           const stageConfig = join(temporaryRoot, "worker.json");
           try {
@@ -427,21 +416,21 @@ function main(): Promise<void> {
                 provider: "codex-chatgpt-signin",
                 model: normalizeRouteModel(selected.model ?? operations.dispatch.model ?? LEGACY_DEFAULT_CODEX_MODEL),
                 reasoningEffort: selected.reasoningEffort ?? operations.dispatch.reasoningEffort ?? "low",
-                reason: `Frozen ${stage.stage.role} evaluation stage: preserve the fixed Codex route and participant/assessor separation.`,
+                reason: "Fixed package stage: use the configured Codex route.",
                 financialBasis: "subscription-suitability-not-price-comparison",
                 routingPolicy: "balanced-quality",
                 taskClass: "explicit",
                 capabilityTier: "explicit",
-                capabilitySignals: ["frozen evaluation stage"],
+                capabilitySignals: ["fixed package stage"],
                 localModelCandidate: false,
               };
               coordinator.recordAuditNote(String(coordinator.getGoal(goalId).current_job_id), "route_selected", JSON.stringify({
                 ...selectedRoute,
                 objective: stage.objectiveOverride,
                 catalogFetchedAt: null,
-                catalogSource: "frozen evaluation profile",
+                catalogSource: "fixed package stage",
                 allowanceComparison: "unavailable",
-                providerAvailability: "configured fixed evaluation route",
+                providerAvailability: "configured fixed route",
               }));
             }
             operations.dispatch.model = selected.model;
@@ -449,7 +438,7 @@ function main(): Promise<void> {
             writeFileSync(stageConfig, JSON.stringify({ ...selected, writableWorkspacePaths }));
             assertStageWrites(stage, stageConfig);
             // Apply current guidance even when an older long-lived server queued the saved objective.
-            // Fixed participant/assessor objectives remain immutable.
+            // Fixed package objectives remain immutable.
             const dispatchGoal = coordinator.getGoal(goalId);
             const dispatchJob = coordinator.getJob(String(dispatchGoal.current_job_id));
             const dispatchObjective = stage.stage.objectiveMode === "coordinator"

@@ -9,7 +9,7 @@
       "purpose": "Check the fixed stable release source for an Amadeus update",
       "allowedOrigins": ["https://api.github.com"],
       "dataCategories": ["repository-identifier", "http-request-metadata"],
-      "trigger": "manual check or consented startup/24-hour check",
+      "trigger": "consented manual check, at most once per 24 hours unless forced",
       "consentKey": "updateChecks",
       "explicitConsent": true,
       "defaultEnabled": false,

@@ -150,29 +150,14 @@ await test("update check cases + interval", async () => {
   })).status, "malformed");
 });
 
-await test("stage/approve/rollback/pending-restart/partial", () => {
-  const stateRoot = tempState();
-  const paths = update.defaultUpdatePaths(stateRoot);
-  const release = { version: "0.3.1", tag: "0.3.1", repo: "MadMaxSoftware/amadeus", name: "0.3.1", body: "notes" };
-  assert.equal(update.stageUpdate({ paths, release, files: [{ path: "README.md", content: "hi\n" }] }).status, "partial");
-  const pluginJson = JSON.stringify({ name: "amadeus", version: "0.3.1+amadeus.20261013010000" }, null, 2);
-  assert.equal(update.stageUpdate({
-    paths, release,
-    files: [
-      { path: "plugins/amadeus/.codex-plugin/plugin.json", content: `${pluginJson}\n` },
-      { path: "package.json", content: "{\"version\":\"0.3.1\"}\n" },
-    ],
-  }).status, "staged");
-  assert.equal(update.approveActivation({ paths, approval: false }).status, "approval-required");
-  const approved = update.approveActivation({
-    paths, approval: true, currentVersion: "0.3.0",
-    currentFiles: [{ path: "plugins/amadeus/.codex-plugin/plugin.json", content: "{\"version\":\"0.3.0\"}\n" }],
-  });
-  assert.equal(approved.status, "pending-restart");
-  assert.equal(approved.pendingRestart.hotReplacement, false);
-  const rolled = update.rollbackUpdate({ paths, targetDir: path.join(stateRoot, "restored") });
-  assert.equal(rolled.status, "rolled-back");
-  assert.ok(fs.existsSync(path.join(stateRoot, "restored", "plugins", "amadeus", ".codex-plugin", "plugin.json")));
+await test("updates are check-only", () => {
+  for (const removed of ["stageUpdate", "approveActivation", "rollbackUpdate", "startupUpdateCheck", "invokeMarketplaceUpgradeGuidance"]) {
+    assert.equal(update[removed], undefined, `${removed} must not exist`);
+    assert.equal(lifecycle[removed], undefined, `${removed} must not be re-exported`);
+  }
+  assert.equal(lifecycle.runStartupLifecycle, undefined);
+  const paths = update.defaultUpdatePaths(tempState());
+  assert.deepEqual(Object.keys(paths).sort(), ["consentPath", "root", "statePath"]);
 });
 
 await test("discovery consent/no-LAN/manual", async () => {
@@ -258,13 +243,13 @@ await test("pilot gate + isolation + stable routing off", async () => {
   }).primary.provider, "software");
 });
 
-await test("config migration + startup lifecycle", async () => {
+await test("config migration + lifecycle status", async () => {
   const stateRoot = tempState();
   const migrated = runtime.migrateMachineConfig({ schemaVersion: 1, setupRoot: stateRoot, stateRoot });
   assert.equal(migrated.schemaVersion, 3);
   assert.equal(migrated.runtimeAuthority, "packaged");
   assert.equal(migrated.consents.updateChecks, false);
-  const boot = await lifecycle.runStartupLifecycle({ stateRoot, currentVersion: "0.3.0" });
+  const boot = await lifecycle.runLifecycleStatus({ stateRoot, currentVersion: "0.3.0" });
   assert.equal(boot.updates.status, "consent-required");
   assert.equal(boot.localRouting.localAutomaticRouting, false);
 });

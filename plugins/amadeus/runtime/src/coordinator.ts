@@ -92,6 +92,11 @@ export class Coordinator {
     if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
+  private dropColumnIfPresent(table: string, column: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+  }
+
   private migrate(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
@@ -239,7 +244,6 @@ export class Coordinator {
     this.addColumnIfMissing("jobs", "package_stage_iteration", "INTEGER");
     this.addColumnIfMissing("jobs", "iteration_objective", "TEXT");
     this.addColumnIfMissing("goals", "project_root", "TEXT");
-    this.addColumnIfMissing("goals", "expected_case_id", "TEXT");
     this.addColumnIfMissing("goals", "continuous_development", "INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("goals", "goal_revision", "INTEGER NOT NULL DEFAULT 1");
     this.addColumnIfMissing("goal_git_approvals", "target_remote_url", "TEXT");
@@ -254,7 +258,9 @@ export class Coordinator {
     this.db.exec("UPDATE jobs SET package_stage_iteration=goal_iteration WHERE goal_id IS NOT NULL AND package_stage_iteration IS NULL");
     this.db.exec("CREATE INDEX IF NOT EXISTS jobs_goal_id ON jobs(goal_id); CREATE INDEX IF NOT EXISTS goal_events_goal_id ON goal_events(goal_id);");
     this.db.exec("CREATE INDEX IF NOT EXISTS goal_git_approvals_binding ON goal_git_approvals(goal_id, goal_revision, source_revision);");
-    this.db.prepare("UPDATE settings SET value='2' WHERE key='schema_version'").run();
+    // Schema 3 drops the removed evaluation profile's case column.
+    this.dropColumnIfPresent("goals", "expected_case_id");
+    this.db.prepare("UPDATE settings SET value='3' WHERE key='schema_version'").run();
     this.db.prepare(`
       UPDATE jobs SET reservation_released_at=updated_at
       WHERE status IN ('completed', 'failed', 'blocked_budget') AND reservation_released_at IS NULL
@@ -488,7 +494,6 @@ export class Coordinator {
     reserveCredits: number;
     budgetCredits?: number;
     projectRoot?: string;
-    expectedCaseId?: string;
     continuous?: boolean;
   }): Record<string, unknown> {
     const objective = input.objective.trim();
@@ -514,11 +519,6 @@ export class Coordinator {
         VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
       `).run(goalId, key, objective, successCriteria, constraints, reserveMicros, budgetMicros, input.continuous === true ? 1 : 0, timestamp, timestamp);
       if (input.projectRoot) this.db.prepare("UPDATE goals SET project_root=? WHERE id=?").run(input.projectRoot, goalId);
-      if (input.expectedCaseId) {
-        const expectedCaseId = input.expectedCaseId.trim().toLowerCase();
-        if (!/^[a-z][a-z0-9-]{0,40}$/.test(expectedCaseId)) throw new Error("expected case id is invalid");
-        this.db.prepare("UPDATE goals SET expected_case_id=? WHERE id=?").run(expectedCaseId, goalId);
-      }
       this.goalEvent(goalId, "created", { estimatedCreditsPerWorkerCall: input.reserveCredits });
       this.enqueueGoalIterationLocked(goalId, objective);
       this.db.exec("COMMIT");
@@ -765,7 +765,7 @@ export class Coordinator {
         && recovery?.scope === "same-approved-scope" && String(recovery?.diagnosis ?? "").trim()
         && String(recovery?.nextObjective ?? "").trim());
       if (!rejected || rejected.status !== "completed" || (!recoverableTechnicalBlock && !priorStage)) {
-        throw new Error("blocked goal has no failed or assessor-rejected iteration to replace");
+        throw new Error("blocked goal has no failed or later-stage-rejected iteration to replace");
       }
       const replacedStageJob = recoverableTechnicalBlock ? rejected : priorStage!;
       const replacementStage = recoverableTechnicalBlock ? rejectedStage : rejectedStage - 1;
@@ -773,7 +773,7 @@ export class Coordinator {
       try {
         if (this.stopIfNoProgressLocked(id)) { this.db.exec("COMMIT"); return this.getGoal(id); }
         this.goalEvent(id, "retry_authorized", { rejectedJobId: rejected.id, replacedStageJobId: replacedStageJob.id,
-          reason, recoveryKind: recoverableTechnicalBlock ? "corrected-technical-block" : "assessor-rejection" });
+          reason, recoveryKind: recoverableTechnicalBlock ? "corrected-technical-block" : "later-stage-rejection" });
         const replacement = this.enqueueGoalIterationLocked(id, String(goal.objective), goal.answer as string | null, replacementStage);
         if (!replacement) throw new Error("replacement iteration could not be queued");
         const timestamp = this.now();
@@ -781,7 +781,7 @@ export class Coordinator {
         this.db.prepare("UPDATE jobs SET reservation_released_at=?, updated_at=? WHERE id=? AND status='queued'")
           .run(timestamp, timestamp, String(replacement.id));
         this.goalEvent(id, "retry_queued_paused", { rejectedJobId: rejected.id, replacedStageJobId: replacedStageJob.id,
-          replacementJobId: replacement.id, recoveryKind: recoverableTechnicalBlock ? "corrected-technical-block" : "assessor-rejection" });
+          replacementJobId: replacement.id, recoveryKind: recoverableTechnicalBlock ? "corrected-technical-block" : "later-stage-rejection" });
         this.db.exec("COMMIT");
         return this.getGoal(id);
       } catch (error) { this.db.exec("ROLLBACK"); throw error; }
@@ -882,24 +882,6 @@ export class Coordinator {
     this.event(String(job.id), "stalled_recovery_requested", { reason });
     this.goalEvent(id, "stalled_recovery_requested", { jobId: job.id, reason });
     return { goal: this.getGoal(id), job: this.getJob(String(job.id)) };
-  }
-
-  invalidateCompletedGoal(id: string, detail: string, expectedCaseId?: string): Record<string, unknown> {
-    const reason = detail.trim();
-    if (!reason) throw new Error("invalidation reason is required");
-    const goal = this.getGoal(id);
-    if (goal.status !== "completed" || goal.current_job_id) throw new Error("only an idle completed goal can be invalidated");
-    const timestamp = this.now();
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const normalized = expectedCaseId?.trim().toLowerCase();
-      if (normalized && !/^[a-z][a-z0-9-]{0,40}$/.test(normalized)) throw new Error("expected case id is invalid");
-      this.db.prepare("UPDATE goals SET status='blocked', expected_case_id=COALESCE(?, expected_case_id), next_objective=?, updated_at=? WHERE id=?")
-        .run(normalized ?? null, `Correct the preserved identity mismatch before retrying: ${reason}`, timestamp, id);
-      this.goalEvent(id, "completion_invalidated", { reason, expectedCaseId: normalized ?? goal.expected_case_id ?? null });
-      this.db.exec("COMMIT");
-      return this.getGoal(id);
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
   finishGoalIteration(jobId: string, outcome: string, resultArtifactPath: string | undefined, decision: GoalDecision): Record<string, unknown> {

@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { loadManifest, validateManifestSources, type BackupManifest } from "./worker-isolation.ts";
 import { writeDevelopmentManifest } from "./development-project.ts";
 
-export type GoalStageRole = "development" | "participant" | "assessor";
+export type GoalStageRole = "development";
 
 export type GoalStage = {
   iteration: number;
@@ -47,8 +47,6 @@ export type GoalExecutionPackage = {
   provider?: string;
   model?: string;
   reasoningEffort?: string;
-  selectedOpaqueCase?: string;
-  allOpaqueCases?: string[];
   stages: GoalStage[];
 };
 
@@ -58,8 +56,6 @@ export type PreparedGoalStage = {
   manifestPath: string;
   objectiveOverride: string | null;
   manifestValidation: ReturnType<typeof validateManifestSources>;
-  selectedOpaqueCase: string | null;
-  allOpaqueCases: string[];
 };
 
 function sha256(path: string): string {
@@ -112,6 +108,9 @@ function readPackage(packagePathInput: string, expectedGoalId: string): {
     || descriptor.stages.length === 0) {
     throw new Error("Unsupported, incomplete, or mismatched goal execution package");
   }
+  if ("selectedOpaqueCase" in descriptor || "allOpaqueCases" in descriptor) {
+    throw new Error("Opaque-evaluation goal packages are no longer supported");
+  }
   const iterations = new Set<number>();
   for (const stage of descriptor.stages) {
     if (!Number.isSafeInteger(stage.iteration) || stage.iteration <= 0 || iterations.has(stage.iteration)) {
@@ -119,7 +118,7 @@ function readPackage(packagePathInput: string, expectedGoalId: string): {
     }
     iterations.add(stage.iteration);
     if (!/^[a-z][a-z0-9-]{0,40}$/.test(stage.name)
-      || !["development", "participant", "assessor"].includes(stage.role)) {
+      || stage.role !== "development") {
       throw new Error("Goal package stage identity is invalid");
     }
     validateWritePaths(stage.allowedWritableWorkspacePaths);
@@ -151,14 +150,6 @@ function readPackage(packagePathInput: string, expectedGoalId: string): {
       ] as const) safeRelative(value, `${stage.name} ${label}`);
     }
   }
-  if (descriptor.selectedOpaqueCase !== undefined) {
-    if (!Array.isArray(descriptor.allOpaqueCases) || !descriptor.allOpaqueCases.includes(descriptor.selectedOpaqueCase)) {
-      throw new Error("Selected opaque case is not in the declared case set");
-    }
-    if (new Set(descriptor.allOpaqueCases).size !== descriptor.allOpaqueCases.length) {
-      throw new Error("Opaque case set contains duplicates");
-    }
-  }
   return { packageRoot, packagePath, descriptor };
 }
 
@@ -167,30 +158,6 @@ function stageFor(descriptor: GoalExecutionPackage, iteration: number): GoalStag
   if (exact) return exact;
   if (descriptor.mode === "repeat") return descriptor.stages.at(-1)!;
   throw new Error(`Goal execution package has no stage for iteration ${iteration}`);
-}
-
-function assertParticipantIsolation(
-  descriptor: GoalExecutionPackage,
-  stage: GoalStage,
-  manifestPath: string,
-): void {
-  if (stage.role !== "participant") return;
-  const manifest = loadManifest(manifestPath);
-  const selected = descriptor.selectedOpaqueCase?.toLowerCase();
-  const siblings = (descriptor.allOpaqueCases ?? []).filter((item) => item.toLowerCase() !== selected);
-  for (const file of manifest.files) {
-    const normalized = file.path.replaceAll("\\", "/").toLowerCase();
-    if (/(^|\/)(assessor-only|criteria|private-analysis|evidence|runs)(\/|$)/.test(normalized)) {
-      throw new Error(`Participant manifest exposes a protected path: ${file.path}`);
-    }
-    if (siblings.some((caseId) => normalized.split("/").includes(caseId.toLowerCase()))) {
-      throw new Error(`Participant manifest exposes a sibling case: ${file.path}`);
-    }
-    const text = readFileSync(resolve(manifest.source.projectRoot, ...file.path.split("/")), "utf8");
-    if (/assessor-only|expectedDirection|criticalFailures/i.test(text)) {
-      throw new Error(`Participant source contains an assessor cue: ${file.path}`);
-    }
-  }
 }
 
 function addArtifact(
@@ -219,17 +186,12 @@ export function inspectGoalExecutionPackage(
   expectedGoalId: string,
   iteration: number,
   allowPendingHandoff = false,
-  expectedOpaqueCase?: string | null,
 ): PreparedGoalStage {
   const loaded = readPackage(packagePath, expectedGoalId);
-  if (expectedOpaqueCase && loaded.descriptor.selectedOpaqueCase?.toLowerCase() !== expectedOpaqueCase.toLowerCase()) {
-    throw new Error(`Goal package case mismatch: expected ${expectedOpaqueCase}, found ${loaded.descriptor.selectedOpaqueCase ?? "none"}`);
-  }
   const stage = stageFor(loaded.descriptor, iteration);
   if (stage.handoff && !allowPendingHandoff) throw new Error(`${stage.name} requires a prepared previous-stage handoff`);
   const manifestPath = inside(loaded.packageRoot, stage.manifest);
   const manifestValidation = validateManifestSources(manifestPath);
-  assertParticipantIsolation(loaded.descriptor, stage, manifestPath);
   return {
     packagePath: loaded.packagePath,
     stage,
@@ -238,8 +200,6 @@ export function inspectGoalExecutionPackage(
       ? readFileSync(inside(loaded.packageRoot, stage.objectiveFile!), "utf8")
       : null,
     manifestValidation,
-    selectedOpaqueCase: loaded.descriptor.selectedOpaqueCase ?? null,
-    allOpaqueCases: [...(loaded.descriptor.allOpaqueCases ?? [])],
   };
 }
 
@@ -273,7 +233,6 @@ export function prepareGoalExecutionStage(input: {
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   }
   const manifestValidation = validateManifestSources(manifestPath);
-  assertParticipantIsolation(loaded.descriptor, stage, manifestPath);
   return {
     packagePath: loaded.packagePath,
     stage,
@@ -282,8 +241,6 @@ export function prepareGoalExecutionStage(input: {
       ? readFileSync(inside(loaded.packageRoot, stage.objectiveFile!), "utf8")
       : null,
     manifestValidation,
-    selectedOpaqueCase: loaded.descriptor.selectedOpaqueCase ?? null,
-    allOpaqueCases: [...(loaded.descriptor.allOpaqueCases ?? [])],
   };
 }
 
