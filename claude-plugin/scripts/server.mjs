@@ -1,8 +1,9 @@
 import { onboardingInstructions } from "./privacy-onboarding.mjs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { activeRuns, runBackground } from "./background-run.mjs";
 import { fileURLToPath } from "node:url";
 import { AMADEUS_PRODUCT } from "./amadeus-runtime.mjs";
+import { readPluginVersion } from "./amadeus-lifecycle.mjs";
 import { withCoordinator } from "./server-common.mjs";
 import { toolDefinitions } from "./tool-definitions.mjs";
 import { callTool } from "./tool-dispatch.mjs";
@@ -14,6 +15,9 @@ export { gitMilestoneCheckStatus, formatMilestoneGitOwnerSummary, recordedHostVe
 export { isMeaningfulProgressEvent, progressCheckpoint, liveProgressSummary, withBackgroundHostState } from "./work-views.mjs";
 export { callTool } from "./tool-dispatch.mjs";
 
+// The installed plugin manifest is the single source of the version this server reports.
+const SERVER_VERSION = readPluginVersion(resolve(dirname(fileURLToPath(import.meta.url)), "..")) ?? "unknown";
+
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
@@ -24,7 +28,7 @@ async function handle(message) {
     send({ jsonrpc: "2.0", id: message.id, result: {
       protocolVersion: message.params?.protocolVersion ?? "2025-06-18",
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: AMADEUS_PRODUCT.pluginName, version: "0.3.8", title: `${AMADEUS_PRODUCT.displayName}  -  ${AMADEUS_PRODUCT.descriptor}` },
+      serverInfo: { name: AMADEUS_PRODUCT.pluginName, version: SERVER_VERSION, title: `${AMADEUS_PRODUCT.displayName}  -  ${AMADEUS_PRODUCT.descriptor}` },
       instructions: onboardingInstructions + " Amadeus  -  Local AI Orchestrator by Mad Max Systems. Maestro is an alias for Amadeus with the same instructions, behavior, and orchestration engine. Use the current project's absolute path. Use included subscription allowance without artificial spending gates; ordinary tools first, inexpensive suitable models next. Missing roadmap-required development tools and dependencies are routine authorized setup: install and verify them automatically. During continuous-development or Long-Haul Autopilot work, repair orchestration defects and routine technical failures automatically with ordinary software, verify the repair, and resume the same unfinished goal. If required evidence or tools are on another Amadeus worker, use read-only host reconciliation or package handoff; do not stop because a fresh worker root cannot see a preserved artifact. Continue bounded troubleshooting after technical failures, including safe alternate sources and worker-to-host reconciliation; do not stop while a safe route remains. If owner action is genuinely required, surface one concrete plain-language question naming the action and purpose; never expose only an owner-gated or approval-required label. Before ending any turn, re-read the exact goal; if it is active, keep waiting, and if it is terminal, report the exact terminal state. Never claim a stale or different goal is still active. Continue authorized work until finished or genuinely blocked. Preserve unfinished work and report completion only with evidence.",
     } });
     return;

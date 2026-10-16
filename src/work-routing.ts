@@ -164,6 +164,12 @@ export function selectWorkRoute(input: {
    */
   localModelPilotGateOpen?: boolean;
   qualifiedLocalModels?: QualifiedLocalModelCandidate[];
+  /**
+   * Windows UI plans act on the host desktop, outside every worker sandbox.
+   * Only an objective the owner wrote may route to them; a worker-proposed
+   * continuation is ordinary sandboxed model work. Defaults to false.
+   */
+  desktopAutomationAllowed?: boolean;
 }): WorkRoute {
   const avoided = new Set<ModelRoute["provider"]>([
     ...(input.avoidProvider ? [input.avoidProvider] : []),
@@ -192,7 +198,8 @@ export function selectWorkRoute(input: {
       taskClass: "explicit", capabilityTier: "explicit", capabilitySignals: ["explicit provider/model selection"], localModelCandidate: false,
     });
   }
-  const command = deterministicCommand(input.objective);
+  const detected = deterministicCommand(input.objective);
+  const command = detected?.startsWith("windows-ui-") && input.desktopAutomationAllowed !== true ? undefined : detected;
   if (command) return { provider: "software", model: null, reasoningEffort: "none", command,
     reason: command.startsWith("windows-ui-")
       ? "Exact allowlisted Windows UI plan: use deterministic host software without a model call."

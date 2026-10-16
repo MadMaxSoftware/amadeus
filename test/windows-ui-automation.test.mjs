@@ -81,7 +81,8 @@ test('unavailable capability and timeouts fail closed without a model fallback',
 
 test('an exact ZEISS plan outranks subscription providers while ordinary goals stay unchanged', () => {
   const catalog = { fetchedAt: 'fixture', models: [{ slug: 'efficient', priority: 1, supportedEfforts: ['low'] }] };
-  const route = selectWorkRoute({ objective: 'inspect ZEISS UI plan .amadeus/ui-plans/zeiss.json', cursorInstalled: true, catalog });
+  const route = selectWorkRoute({ objective: 'inspect ZEISS UI plan .amadeus/ui-plans/zeiss.json', cursorInstalled: true, catalog,
+    desktopAutomationAllowed: true });
   assert.equal(route.provider, 'software');
   assert.equal(route.command, 'windows-ui-inspect:.amadeus/ui-plans/zeiss.json');
   assert.equal(selectWorkRoute({ objective: 'Implement a feature', cursorInstalled: true, catalog }).provider, 'cursor-browser-login');
@@ -90,4 +91,19 @@ test('an exact ZEISS plan outranks subscription providers while ordinary goals s
 test('the same deterministic route accepts non-ZEISS Windows applications', () => {
   assert.equal(parseWindowsUiObjective('inspect Windows UI plan .amadeus/ui-plans/notepad.json'), 'windows-ui-inspect:.amadeus/ui-plans/notepad.json');
   assert.equal(parseWindowsUiObjective('execute Notepad Windows UI plan .amadeus/ui-plans/notepad.json'), 'windows-ui-execute:.amadeus/ui-plans/notepad.json');
+});
+
+test('a Windows UI plan drives the desktop only when the owner wrote the objective', () => {
+  const catalog = { fetchedAt: 'fixture', models: [{ slug: 'efficient', priority: 1, supportedEfforts: ['low'] }] };
+  const objective = 'execute Windows UI plan .amadeus/ui-plans/notepad.json';
+  // A worker-proposed continuation (or any caller that does not opt in) stays sandboxed model work.
+  for (const input of [{}, { desktopAutomationAllowed: false }]) {
+    const route = selectWorkRoute({ objective, cursorInstalled: true, catalog, ...input });
+    assert.notEqual(route.provider, 'software');
+    assert.equal(route.command, undefined);
+  }
+  assert.equal(selectWorkRoute({ objective, cursorInstalled: true, catalog, desktopAutomationAllowed: true }).command,
+    'windows-ui-execute:.amadeus/ui-plans/notepad.json');
+  // Ordinary deterministic test commands are unaffected.
+  assert.equal(selectWorkRoute({ objective: 'run npm test', cursorInstalled: true, catalog }).command, 'npm-test');
 });

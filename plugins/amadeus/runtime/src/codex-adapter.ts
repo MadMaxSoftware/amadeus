@@ -8,6 +8,7 @@ import { verifyWorkspace } from "./worker-isolation.ts";
 import { terminateWorkerTree } from "./worker-process.ts";
 import { isolationSecurityStateBinding } from "./isolation-security-state.ts";
 import { resolveMaximumIdleSeconds } from "./worker-timeouts.ts";
+import { withoutCredentials } from "./worker-environment.ts";
 
 export type CodexAdapterConfig = {
   executable?: string;
@@ -460,12 +461,10 @@ export function runCodex(config: CodexAdapterConfig, workspace: string, objectiv
 
 /** Worker subprocesses must not inherit coordinator state/config authority. */
 export function isolatedWorkerEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { ...process.env, ...overrides };
+  const environment: NodeJS.ProcessEnv = { ...withoutCredentials(process.env), ...overrides };
   for (const key of Object.keys(environment)) {
     if (key.startsWith("AMADEUS_")) delete environment[key];
   }
-  delete environment.OPENAI_API_KEY;
-  delete environment.CODEX_API_KEY;
   environment.CI = "1";
   environment.AMADEUS_WORKER = "1";
   return environment;

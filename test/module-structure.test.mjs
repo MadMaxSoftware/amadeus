@@ -48,3 +48,11 @@ test('coordinator.ts still runs as a command-line tool and re-exports its helper
   assert.equal(typeof coordinator.Coordinator, 'function');
   assert.equal(coordinator.projectRootsOverlap('C:\\a', 'C:\\a\\b'), true);
 });
+
+test('the MCP server reports the installed plugin version', () => {
+  const version = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).version;
+  const result = spawnSync(process.execPath, [join(scripts, 'server.mjs')], { encoding: 'utf8', timeout: 30000,
+    input: `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n` });
+  const reply = result.stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line)).find((message) => message.id === 1);
+  assert.equal(reply.result.serverInfo.version, version);
+});

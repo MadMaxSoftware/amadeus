@@ -367,6 +367,8 @@ function main(): Promise<void> {
               }
               const plan = planWorkRoute({
                 objective, pinned, suggested, avoidProviders: [...avoidProviders],
+                // Host desktop automation only for the owner's own goal objective, never a worker-proposed step.
+                desktopAutomationAllowed: objective === String(goal.objective),
                 cursorInstalled, claudeInstalled, catalog,
               });
               const route = plan.primary;

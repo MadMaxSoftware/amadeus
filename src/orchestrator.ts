@@ -85,6 +85,9 @@ export interface VerificationDriver {
 
 export class DefiniteWorkerFailure extends Error {}
 
+/** Consecutive failed stop-request polls before a running worker is aborted. */
+export const STOP_POLL_FAILURE_LIMIT = 5;
+
 export class UntrustedWorkerReceiptError extends Error {
   readonly partialResult: WorkerResult;
 
@@ -103,6 +106,8 @@ export class Orchestrator {
   private readonly applicator: PatchApplicator;
   private readonly options: { workerName?: string; leaseSeconds?: number; maximumIdleSeconds?: number; model?: string; maximumChangedFiles?: number | null; maximumChangedLines?: number | null; patchPolicy?: "apply" | "capture-only";
     verifier?: VerificationDriver;
+    /** Stop-request poll interval; tests shorten it. */
+    stopPollIntervalMs?: number;
     routeStep?: { provider: string; model: string | null; reasoningEffort: string; financialBasis: string; reason: string };
     onVerifiedMilestone?: (input: {
       jobId: string;
@@ -131,6 +136,7 @@ export class Orchestrator {
       maximumChangedLines?: number | null;
       patchPolicy?: "apply" | "capture-only";
       verifier?: VerificationDriver;
+      stopPollIntervalMs?: number;
       routeStep?: { provider: string; model: string | null; reasoningEffort: string; financialBasis: string; reason: string };
       onVerifiedMilestone?: (input: {
         jobId: string;
@@ -170,13 +176,17 @@ export class Orchestrator {
     // productive output arrives. A second orchestration-level timer measures
     // wall-clock duration instead, so it can abort a healthy long-running
     // provider at exactly the configured idle threshold.
+    // A single failed poll (for example a briefly locked database) must not kill
+    // a healthy worker; only a run of consecutive failures stops it.
+    let failedStopPolls = 0;
     const stopMonitor = setInterval(() => {
       try {
         if (this.coordinator.stopRequested(jobId, workerName)) controller.abort();
+        failedStopPolls = 0;
       } catch {
-        controller.abort();
+        if (++failedStopPolls >= STOP_POLL_FAILURE_LIMIT) controller.abort();
       }
-    }, 1000);
+    }, this.options.stopPollIntervalMs ?? 1000);
     let primaryStepRecorded = false;
     let verificationStepStarted = false;
     let verificationStepRecorded = false;
@@ -236,6 +246,9 @@ export class Orchestrator {
         }));
         primaryStepRecorded = true;
       }
+      // A goal iteration without a structured decision is untrustworthy: refuse it
+      // before anything is applied to the authoritative project.
+      if (claimed.goal_id && !result.goalDecision) throw new Error("Goal iteration returned no trustworthy structured decision");
       if (result.goalDecision?.normalizations?.length) {
         this.coordinator.recordAuditNote(jobId, "goal_decision_normalized", JSON.stringify({
           schemaVersion: 1,

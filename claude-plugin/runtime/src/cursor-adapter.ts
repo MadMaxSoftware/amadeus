@@ -8,6 +8,7 @@ import { verifyWorkspace } from "./worker-isolation.ts";
 import { terminateWorkerTree } from "./worker-process.ts";
 import { WORKER_RUNTIME_DIRECTORY, workerRuntimeLayout } from "./worker-runtime-layout.ts";
 import { isolationSecurityStateBinding } from "./isolation-security-state.ts";
+import { withoutCredentials } from "./worker-environment.ts";
 
 export type CursorAdapterConfig = {
   schemaVersion: 1;
@@ -356,7 +357,7 @@ export function buildCursorEnvironment(config: CursorAdapterConfig, configuratio
   const resolvedConfigurationDirectory = resolve(configurationDirectory);
   const temporaryDirectory = resolve(resolvedConfigurationDirectory, "tmp");
   const environment: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...withoutCredentials(process.env),
     CI: "1",
     AMADEUS_WORKER: '1',
     // Cursor's subscription login lives at %APPDATA%\Cursor\auth.json. Point
@@ -376,9 +377,6 @@ export function buildCursorEnvironment(config: CursorAdapterConfig, configuratio
     TMP: temporaryDirectory,
     TMPDIR: temporaryDirectory,
   };
-  delete environment.CURSOR_API_KEY;
-  delete environment.OPENAI_API_KEY;
-  delete environment.ANTHROPIC_API_KEY;
   environment.NODE_OPTIONS = `--require=${resolve(config.pathVerifierShim)}`;
   return environment;
 }
