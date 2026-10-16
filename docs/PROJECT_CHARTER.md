@@ -3,7 +3,7 @@
 - **Product:** Amadeus — Local AI Orchestrator by Mad Max Systems
 - **Alias:** Maestro (same Amadeus behavior and orchestration engine)
 - **Public repository:** `https://github.com/MadMaxSoftware/amadeus`
-- **Package version baseline:** `0.3.11` (`plugins/amadeus/.codex-plugin/plugin.json`)
+- **Package version baseline:** `0.4.0` (`plugins/amadeus/.codex-plugin/plugin.json`)
 
 This charter orients local and contributor development on the **public** marketplace
 repository. It does not change runtime plugin behavior.
@@ -16,7 +16,7 @@ candidate matrix are in `docs/HOST_COMPATIBILITY.md`. Agent Plugins 1.0 is the
 implemented canonical asset boundary; the Codex wrapper is generated from it,
 while signed-in worker adapters remain independent of host
 installation. Claude Code is the first non-OpenAI host published for install from
-the shared package; Claude as an Amadeus worker remains optional. Current 0.3.11
+the shared package; Claude as an Amadeus worker remains optional. Current 0.4.0
 Codex behavior and public-trust commitments stay intact.
 
 ## Current state

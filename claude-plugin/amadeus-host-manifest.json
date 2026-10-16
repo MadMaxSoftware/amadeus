@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "host": "claude-code-cli",
-  "version": "0.3.11",
+  "version": "0.4.0",
   "status": "candidate-unverified",
   "assets": {
-    ".claude-plugin/plugin.json": "af0f603a5d15f01502b60c95961a5f63db9fce2a9446d7df132930c9529fa176",
+    ".claude-plugin/plugin.json": "fb1f1eaa915683de2c3319d4ffc335ee918185e148a79c8162615686bd59813f",
     ".mcp.json": "8432d0935a610e9c2ea3e819c9b377fd62451ceba61ba93c4bee4cbd4666b8de",
     "config.example.json": "f554a47c2d2cf1019a1b96efe878180bdc9ddd0e24da7290103236a6b94cae8c",
     "hooks/hooks.json": "93ccb6a37939dd80f3844cc5d896d09132bcb5ba03bbf384635cfae6d9207343",
@@ -14,8 +14,8 @@
     "runtime/config-templates/cursor-worker-config.json": "d63d5aa265579574d78aa9caaa0093f3ea25744f4c44801562dde86c9e5d3d0b",
     "runtime/config-templates/operations-review.json": "56992189a707c366b50f4ed7432e0b70bc8ba84f0f0ccd39b99424825975c697",
     "runtime/config-templates/worker-config.json": "94ec883faea6b9f9a980b4926b4d68c1469d84da4cf3396bfc7daab7b984027a",
-    "runtime/manifest.json": "54667b5f38d4d4e2ac89cea22f138eda85a6f4a9c2910ed757119d6af68db35f",
-    "runtime/package.json": "0f113adb19da7666126887126018ac94c5d4c0cec760731d0ae341d7ae41bf54",
+    "runtime/manifest.json": "ef5b385116777ae5c2135da5d858f231d3a1f2be200f7ac15b6baefd992050f0",
+    "runtime/package.json": "e7d30e9b654fb85b36077fa868c0bfe56a1bd384a1730c0962eeae7de90f74b2",
     "runtime/src/backup-policy.ts": "93f0b100de7cd2019dff9d84170490f537351cc3460bcf7f2c16503cba248a36",
     "runtime/src/claude-adapter.ts": "3797e6c9b0605d46b0dbfc65495047efee59e7c91e56fd54bf1f8ac35476caf3",
     "runtime/src/claude-path-verifier-shim.cjs": "70b6f5dcc7b2a3e32d40c529cc9dcae7bdb6c3cf1009eb0c715043e8e37ab771",

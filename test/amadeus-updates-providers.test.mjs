@@ -436,11 +436,12 @@ test("clean-machine fallback: no providers, gate closed, subscription guidance i
   assert.equal(plan.primary.provider, "codex-chatgpt-signin");
 });
 
-test("package metadata declares 0.3.x and marketplace upgrade command remains friend path", () => {
+test("package and plugin versions agree, have release notes, and keep the marketplace upgrade command", () => {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const plugin = JSON.parse(readFileSync(join(root, "plugins", "amadeus", ".codex-plugin", "plugin.json"), "utf8"));
-  assert.match(pkg.version, /^0\.3\./);
-  assert.match(String(plugin.version), /^0\.3\./);
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(String(plugin.version), pkg.version);
+  assert.ok(existsSync(join(root, "docs", `RELEASE_NOTES_${pkg.version}.md`)), "the release workflow needs notes for this version");
   assert.equal(update.MARKETPLACE_UPGRADE_COMMAND, "codex plugin marketplace upgrade amadeus");
   assert.ok(existsSync(join(root, "docs", "LOCAL_MODEL_PILOT.md")));
   assert.ok(existsSync(join(root, "docs", "UPDATE.md")));

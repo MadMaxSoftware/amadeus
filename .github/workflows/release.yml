@@ -1,0 +1,37 @@
+name: release
+
+# Publish a GitHub Release when a version tag is pushed. The update check reads
+# the latest release, so every tagged version needs one. Release notes come
+# from docs/RELEASE_NOTES_<version>.md.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run public-safety
+      - run: npm run test:packaged
+      - run: npm test
+      - name: Check the tag matches the package version
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "v${version}" = "${GITHUB_REF_NAME}" || { echo "Tag ${GITHUB_REF_NAME} does not match package version ${version}"; exit 1; }
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "${GITHUB_REF_NAME}" --title "Amadeus ${version}" --notes-file "docs/RELEASE_NOTES_${version}.md" --latest

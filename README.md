@@ -129,13 +129,14 @@ rollback, and restart model.
 
 ## Current release
 
-Version **0.3.11** adds one generic, local Windows UI Automation engine for
-Codex and Claude. Host AIs can inspect and operate exposed application controls,
-including text entry, without purchasing a separate model turn for each
-deterministic interaction. ZEISS INSPECT is the first compatibility fixture,
-not a hard-coded application restriction.
+Version **0.4.0** makes unattended runs safer:
+- goals pause and ask after repeated failures or no progress;
+- goals wait out provider usage limits;
+- Codex workers can no longer read credentials or personal folders;
+- network access is opt-in;
+- the goal database is backed up daily.
 
-Full notes: [docs/RELEASE_NOTES_0.3.11.md](docs/RELEASE_NOTES_0.3.11.md).
+Full notes: [docs/RELEASE_NOTES_0.4.0.md](docs/RELEASE_NOTES_0.4.0.md).
 
 ## License
 

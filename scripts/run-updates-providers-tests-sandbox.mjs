@@ -269,11 +269,12 @@ await test("config migration + startup lifecycle", async () => {
   assert.equal(boot.localRouting.localAutomaticRouting, false);
 });
 
-await test("package metadata 0.3.x + pilot doc", () => {
+await test("package metadata versions agree + release notes + pilot doc", () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const plugin = JSON.parse(fs.readFileSync(path.join(root, "plugins", "amadeus", ".codex-plugin", "plugin.json"), "utf8"));
-  assert.match(pkg.version, /^0\.3\./);
-  assert.match(String(plugin.version), /^0\.3\./);
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(String(plugin.version), pkg.version);
+  assert.ok(fs.existsSync(path.join(root, "docs", `RELEASE_NOTES_${pkg.version}.md`)));
   assert.ok(fs.existsSync(path.join(root, "docs", "LOCAL_MODEL_PILOT.md")));
   assert.ok(fs.existsSync(path.join(root, "docs", "RELEASE_NOTES_0.3.8.md")));
   assert.ok(fs.existsSync(path.join(root, "docs", "RELEASE_NOTES_0.3.7.md")));

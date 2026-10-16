@@ -1,7 +1,7 @@
 {
-  "version": "0.3.11",
+  "version": "0.4.0",
   "assets": {
-    ".codex-plugin/plugin.json": "c60b06ae9e0bc7578843ffc9f3eec05a06e626c301c7095c6b2f4e59ae43f3ff",
+    ".codex-plugin/plugin.json": "d5fd5628ebf894f17cd6ca96a86f117f79b3fc193afd8cd4004fa75111fc78fc",
     ".mcp.json": "a28b723de6349861cc097784d884b440ad31ba5959aa87ccf53adce42a9e6fb0",
     "config.example.json": "f554a47c2d2cf1019a1b96efe878180bdc9ddd0e24da7290103236a6b94cae8c",
     "hooks/hooks.json": "408e4aacf239ad720d0711fe9354bd7b7760b0aa0b7ce32e22e39bd61721d1e7",
