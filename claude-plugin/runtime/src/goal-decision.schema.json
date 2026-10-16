@@ -19,7 +19,7 @@
       ]
     },
     "hostHandoff": {
-      "description": "MUST be null unless status=blocked hands an already-authorized step back to the originating host. Never set together with recovery.",
+      "description": "If the next step requires the host, including running tests or commands outside the sandbox or anything the sandbox blocks, return status=blocked with hostHandoff.action naming the already-authorized host action; do not return continue with nextObjective asking another worker to do it. Otherwise MUST be null. Never set together with recovery.",
       "anyOf": [
         { "type": "null" },
         { "type": "object", "additionalProperties": false,

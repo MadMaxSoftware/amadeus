@@ -5,6 +5,13 @@ import { activeRunForGoal } from "./background-run.mjs";
 import { goalEventDetail, structuredAuditDetail } from "./receipt-recovery.mjs";
 import { formatMilestoneGitOwnerSummary } from "./completion-report.mjs";
 
+/** Owner-facing name of a worker provider. */
+function providerLabel(provider) {
+  return provider === "codex-chatgpt-signin" ? "Codex"
+    : provider === "claude-subscription-signin" ? "Claude"
+      : provider ?? "unidentified provider";
+}
+
 export function goalSummary(coordinator, goalId) {
   const goal = coordinator.getGoal(goalId);
   const job = goal.current_job_id ? coordinator.getJob(String(goal.current_job_id)) : null;
@@ -137,7 +144,7 @@ export function ownerWorkView(coordinator, goalId, includeTechnical = false) {
         ? "Cursor"
         : `${step.provider ?? "unidentified provider"} · ${step.model ?? "unidentified"} · ${step.reasoningEffort ?? "unspecified"}`;
     const existing = allocationMap.get(key) ?? {
-      route: step.provider === "codex-chatgpt-signin" ? "Codex" : step.provider ?? "unidentified provider",
+      route: providerLabel(step.provider),
       model: step.model ?? null, reasoningEffort: step.reasoningEffort ?? null, completedSteps: 0,
     };
     if (step.provider === "cursor-browser-login" && step.model) existing.model = step.model;
@@ -149,7 +156,8 @@ export function ownerWorkView(coordinator, goalId, includeTechnical = false) {
     percentage: percent(entry.completedSteps, stepRoutingHistory.length),
   }));
   const allocationSummary = allocationPercentages.map((entry) => {
-    const label = entry.route === "Codex" ? `${entry.route} ${entry.model} (${entry.reasoningEffort})` : entry.route;
+    const label = entry.route === "Codex" || entry.route === "Claude"
+      ? `${entry.route} ${entry.model ?? "default model"} (${entry.reasoningEffort ?? "default effort"})` : entry.route;
     return `${label} ${entry.percentage}%`;
   }).join(", ");
   if (["completed", "stopped", "uncertain"].includes(goal.status)) {

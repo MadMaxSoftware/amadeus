@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Coordinator } from '../src/coordinator.ts';
-import { parseGoalDecision } from '../src/goal-protocol.ts';
+import { formatGoalIterationObjective, parseGoalDecision } from '../src/goal-protocol.ts';
 
 function setup(t, key) {
   const root = mkdtempSync(join(tmpdir(), 'amadeus-structured-decisions-'));
@@ -55,6 +55,17 @@ test('the worker output schema lists hostHandoff as a required, nullable field',
   const schema = JSON.parse(readFileSync(new URL('../src/goal-decision.schema.json', import.meta.url), 'utf8'));
   assert.ok(schema.required.includes('hostHandoff'));
   assert.deepEqual(schema.properties.hostHandoff.anyOf[1].required, ['action']);
+});
+
+test('worker instructions route sandbox-blocked host steps to blocked hostHandoff', () => {
+  const prompt = formatGoalIterationObjective({ goalObjective: 'Verify changes', successCriteria: 'Checks pass',
+    constraints: 'Stay in scope', iteration: 1, iterationObjective: 'Run checks' });
+  assert.match(prompt, /running tests or commands outside the sandbox or doing anything the sandbox blocks/);
+  assert.match(prompt, /return status=blocked with hostHandoff\.action/);
+  assert.match(prompt, /do not return status=continue with a nextObjective asking another worker/);
+  const schema = JSON.parse(readFileSync(new URL('../src/goal-decision.schema.json', import.meta.url), 'utf8'));
+  assert.match(schema.properties.hostHandoff.description, /running tests or commands outside the sandbox/);
+  assert.match(schema.properties.hostHandoff.description, /status=blocked with hostHandoff\.action/);
 });
 
 test('a structured hostHandoff returns the handoff from resume without queuing a worker', (t) => {

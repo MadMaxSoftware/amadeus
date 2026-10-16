@@ -370,6 +370,13 @@ function main(): Promise<void> {
                 ? values["host-provider"] : null;
               const preferredProvider = worker.preferredProvider === "claude-subscription-signin" || worker.preferredProvider === "codex-chatgpt-signin"
                 ? worker.preferredProvider : null;
+              // A provider at its usage limit (on any goal) is skipped until its reset time.
+              const limitedProviders = coordinator.providersAtUsageLimit()
+                .filter((provider): provider is "codex-chatgpt-signin" | "claude-subscription-signin" =>
+                  provider === "codex-chatgpt-signin" || provider === "claude-subscription-signin");
+              const installedProviders = [...(codexInstalled ? ["codex-chatgpt-signin"] : []), ...(claudeInstalled ? ["claude-subscription-signin"] : [])];
+              // One owner setting for every provider: { "<provider>": { "efficient": "...", ... } }.
+              const tierModels = worker.tierModels && typeof worker.tierModels === "object" ? worker.tierModels : null;
               let catalog;
               let catalogSource = "local Codex model catalog";
               try { catalog = readModelCatalog(); }
@@ -384,7 +391,7 @@ function main(): Promise<void> {
                 objective, pinned, suggested, avoidProviders: [...avoidProviders],
                 // Host desktop automation only for the owner's own goal objective, never a worker-proposed step.
                 desktopAutomationAllowed: objective === String(goal.objective),
-                cursorInstalled, claudeInstalled, codexInstalled, hostProvider, preferredProvider, catalog,
+                cursorInstalled, claudeInstalled, codexInstalled, hostProvider, preferredProvider, limitedProviders, tierModels, catalog,
               });
               const route = plan.primary;
               if (catalogSource !== "local Codex model catalog" && route.provider === "codex-chatgpt-signin" && !pinned && !suggested) {
@@ -395,7 +402,7 @@ function main(): Promise<void> {
                 || deterministicCommand(String(goal.objective)) === route.command
                 && /^(?:(?:all\s+)?(?:tests?|build|lint|checks?|type[ -]?checks?)\s+(?:pass(?:es)?|succeeds?)|exit code 0)[.!]?$/i.test(String(goal.success_criteria).trim());
               coordinator.recordAuditNote(String(job.id), "route_selected", JSON.stringify({ ...route,
-                objective, catalogFetchedAt: catalog.fetchedAt, catalogSource, allowanceComparison: "unavailable",
+                objective, installedProviders, limitedProviders, catalogFetchedAt: catalog.fetchedAt, catalogSource, allowanceComparison: "unavailable",
                 providerAvailability: "local-catalog-and-executable-not-live-auth-check" }));
               coordinator.recordAuditNote(String(job.id), "route_plan_created", JSON.stringify({
                 ...plan, objective, catalogFetchedAt: catalog.fetchedAt, catalogSource,

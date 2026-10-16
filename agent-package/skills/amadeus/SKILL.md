@@ -237,8 +237,8 @@ inventory commands. A user instruction not to scan takes precedence.
   generated report in the user-facing task-end response by rendering its
   `ownerBrief` first. Immediately follow it with a visible **Who did the work?**
   breakdown from `completionAudit.workAllocation`: ordinary software, Cursor,
-  and each Codex model/effort used, showing completed routed-step counts and
-  percentages. Include this breakdown in every coordinator task-end brief even
+  and each Codex or Claude model and effort used, always naming the model in
+  its own column, showing completed routed-step counts and percentages. Include this breakdown in every coordinator task-end brief even
   when the owner did not ask for technical detail. Explain in one sentence that
   these percentages measure completed routed steps, not time, code volume,
   tokens, or cash. Report the product outcome separately from any coordinator

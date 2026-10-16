@@ -8,18 +8,50 @@ import type { ModelCatalog, ListedModel } from "./model-catalog.ts";
 /** The interchangeable subscription model providers (decision D5). */
 export type SubscriptionModelProvider = "codex-chatgpt-signin" | "claude-subscription-signin";
 
-/** Claude Code model aliases per capability tier; Codex tiers come from its live catalog. */
-export const CLAUDE_TIER_MODELS = { efficient: "sonnet", workhorse: "opus", frontier: "opus" } as const;
+export type CapabilityTierName = "efficient" | "workhorse" | "frontier";
+
+/** Model name per capability tier for one provider. */
+export type TierModels = Partial<Record<CapabilityTierName, string>>;
 
 /**
- * Order the installed, non-failed providers. An owner preference wins; otherwise
- * prefer the provider the host chat is not using, so one long goal does not use
- * up the allowance the owner is chatting with. With no signal, Codex first.
+ * Default tier names per provider, used only when a provider has no live model
+ * list. They are family aliases that always mean "the newest model of this
+ * family", never version numbers. A provider without an entry here (Codex)
+ * takes its tiers from its live catalog, best first. The owner can override any
+ * provider's tier in the worker config (`tierModels`), so a new model family
+ * or a new provider needs a setting, not an Amadeus release.
+ */
+export const DEFAULT_TIER_MODELS: Readonly<Partial<Record<string, TierModels>>> = {
+  "claude-subscription-signin": { efficient: "sonnet", workhorse: "opus", frontier: "opus" },
+};
+
+/**
+ * The model for a capability tier on any provider: the owner's setting, else the
+ * provider's default name, else the live catalog (best first: frontier, then
+ * workhorse, then efficient). Null when nothing names a model for this tier.
+ */
+export function tierModelFor(provider: string, tier: CapabilityTierName, input: {
+  catalog?: ListedModel[]; tierModels?: Partial<Record<string, TierModels>> | null }): string | null {
+  const configured = input.tierModels?.[provider]?.[tier]?.trim();
+  if (configured) return configured;
+  const named = DEFAULT_TIER_MODELS[provider]?.[tier];
+  if (named) return named;
+  const ranked = input.catalog ?? [];
+  const position = tier === "frontier" ? 0 : tier === "workhorse" ? 1 : 2;
+  return ranked[Math.min(position, ranked.length - 1)]?.slug ?? null;
+}
+
+/**
+ * Order the installed providers that can take work now. An owner preference
+ * wins; otherwise the provider the host chat runs on, so one plan, one set of
+ * tool behaviour and one model family handle the goal, and the other provider
+ * is the reserve when this one fails or reaches its usage limit. With no
+ * signal, Codex first.
  */
 export function orderModelProviders(input: { available: SubscriptionModelProvider[];
   preferredProvider?: SubscriptionModelProvider | null; hostProvider?: SubscriptionModelProvider | null }): SubscriptionModelProvider[] {
   const rank = (provider: SubscriptionModelProvider) => provider === input.preferredProvider ? 0
-    : input.hostProvider && provider !== input.hostProvider ? 1
+    : input.hostProvider && provider === input.hostProvider ? 1
     : provider === "codex-chatgpt-signin" ? 2 : 3;
   return [...input.available].sort((a, b) => rank(a) - rank(b));
 }
@@ -185,10 +217,14 @@ export function selectWorkRoute(input: {
   qualifiedLocalModels?: QualifiedLocalModelCandidate[];
   /** A local Codex executable is available (default true: the catalog came from it). */
   codexInstalled?: boolean;
-  /** The provider the host chat runs on; workers prefer the other one to spread usage. */
+  /** The provider the host chat runs on; workers use the same one first. */
   hostProvider?: SubscriptionModelProvider | null;
-  /** Owner preference between equal providers; overrides host spreading. */
+  /** Owner preference between equal providers; overrides the host provider. */
   preferredProvider?: SubscriptionModelProvider | null;
+  /** Providers whose usage window is exhausted right now; skipped like an uninstalled provider. */
+  limitedProviders?: SubscriptionModelProvider[];
+  /** Owner overrides of the model per tier, keyed by provider (see DEFAULT_TIER_MODELS). */
+  tierModels?: Partial<Record<string, TierModels>> | null;
   /**
    * Windows UI plans act on the host desktop, outside every worker sandbox.
    * Only an objective the owner wrote may route to them; a worker-proposed
@@ -266,8 +302,9 @@ export function selectWorkRoute(input: {
     }
   }
   const ranked = input.catalog.models;
-  const codexAvailable = input.codexInstalled !== false && ranked.length > 0;
-  const claudeAvailable = input.claudeInstalled === true;
+  const limited = new Set(input.limitedProviders ?? []);
+  const codexAvailable = input.codexInstalled !== false && ranked.length > 0 && !limited.has("codex-chatgpt-signin");
+  const claudeAvailable = input.claudeInstalled === true && !limited.has("claude-subscription-signin");
   const installed = [
     ...(codexAvailable ? ["codex-chatgpt-signin" as const] : []),
     ...(claudeAvailable ? ["claude-subscription-signin" as const] : []),
@@ -275,26 +312,29 @@ export function selectWorkRoute(input: {
   const order = orderModelProviders({ available: installed.filter((provider) => !avoided.has(provider)),
     preferredProvider: input.preferredProvider ?? null, hostProvider: input.hostProvider ?? null });
   const selectionSignal = input.preferredProvider && order[0] === input.preferredProvider ? "owner provider preference"
-    : input.hostProvider && order[0] && order[0] !== input.hostProvider ? "spread usage away from the host chat's provider"
+    : input.hostProvider && order[0] === input.hostProvider ? "same provider as the host chat"
+    : order[0] && limited.size > 0 ? "other provider is at its usage limit"
+    : input.hostProvider && order[0] ? "host chat's provider unavailable; using the other provider"
     : order.length === 1 && installed.length === 1 ? "only installed model provider" : "default provider order";
   /** A capability tier on the first available provider (or a named one). */
-  const tierRoute = (tier: "efficient" | "workhorse" | "frontier", desiredEffort: string, reason: string,
+  const tierRoute = (tier: CapabilityTierName, desiredEffort: string, reason: string,
     overrides: Parameters<typeof modelRoute>[2] = {}, provider: SubscriptionModelProvider | undefined = order[0]): WorkRoute => {
-    if (provider === "claude-subscription-signin") {
-      return modelRoute({ provider, model: CLAUDE_TIER_MODELS[tier], reasoningEffort: desiredEffort }, reason, {
-        ...overrides, capabilityTier: tier,
-        capabilitySignals: [...(overrides.capabilitySignals ?? profile.capabilitySignals), selectionSignal] });
-    }
-    const position = tier === "frontier" ? 0 : tier === "workhorse" ? 1 : 2;
-    const model: ListedModel = ranked[Math.min(position, ranked.length - 1)];
-    if (!model) throw new Error("No installed subscription model provider is available for this step");
-    const effort = model.supportedEfforts.includes(desiredEffort) ? desiredEffort
-      : model.supportedEfforts.includes("medium") ? "medium"
-      : model.supportedEfforts[0];
-    if (!effort) throw new Error(`No supported reasoning effort for ${model.slug}`);
-    return modelRoute({ provider: "codex-chatgpt-signin", model: model.slug, reasoningEffort: effort }, reason, {
+    if (!provider && limited.size > 0) throw new Error("Every installed subscription model provider is at its usage limit");
+    // The same rule for every provider; only Codex publishes a live catalog today.
+    const routed: SubscriptionModelProvider = provider ?? "codex-chatgpt-signin";
+    const catalog = routed === "codex-chatgpt-signin" ? ranked : [];
+    const slug = tierModelFor(routed, tier, { catalog, tierModels: input.tierModels });
+    if (!slug) throw new Error("No installed subscription model provider is available for this step");
+    // A catalog entry states which efforts the model supports; otherwise pass the tier's effort through.
+    const listed = catalog.find((entry) => entry.slug === slug);
+    const effort = !listed ? desiredEffort
+      : listed.supportedEfforts.includes(desiredEffort) ? desiredEffort
+      : listed.supportedEfforts.includes("medium") ? "medium"
+      : listed.supportedEfforts[0];
+    if (!effort) throw new Error(`No supported reasoning effort for ${slug}`);
+    return modelRoute({ provider: routed, model: slug, reasoningEffort: effort }, reason, {
       ...overrides, capabilityTier: tier,
-      capabilitySignals: [...(overrides.capabilitySignals ?? profile.capabilitySignals), ...(installed.length > 1 ? [selectionSignal] : [])] });
+      capabilitySignals: [...(overrides.capabilitySignals ?? profile.capabilitySignals), ...(installed.length > 1 || limited.size > 0 || routed !== "codex-chatgpt-signin" ? [selectionSignal] : [])] });
   };
   const fallback = (signal: string) => ({ taskClass: "provider-fallback" as const, capabilitySignals: [signal], localModelCandidate: false });
   if (avoided.has("cursor-browser-login") && order.length > 0) {

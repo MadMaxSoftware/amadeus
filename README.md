@@ -50,6 +50,26 @@ In practical terms, you can ask for a substantial development or computer-based
 outcome and let Amadeus coordinate the repetitive software work, AI workers,
 verification, recovery, and continuation needed to finish it.
 
+## Choosing workers and models
+
+Amadeus works with whichever AI is installed (Codex, Claude) and treats them
+the same way:
+
+- **Which provider:** the one your chat runs on, so one plan does the work. The
+  other provider is a reserve: it takes over when the first one fails or
+  reaches its usage limit. To always use one, set `"preferredProvider"` in
+  `runtime-config/worker-config.json`.
+- **Which model:** the cheapest tier that fits the step. Plain software first,
+  then the routine (`efficient`) tier, the `workhorse` tier for hard design or
+  diagnosis, and the `frontier` tier only for exceptional work. Codex tiers
+  come from its live model list. Claude tiers default to the family names
+  `sonnet` and `opus`, which always mean the newest model of that family, so
+  model updates need no Amadeus update.
+- **Changing a tier:** one setting covers every provider, for example
+  `"tierModels": { "claude-subscription-signin": { "frontier": "fable" } }`.
+  If a provider rejects a model name, the worker falls back to that
+  provider's own default model.
+
 ## Verifying changes
 
 Before a worker's change is applied, Amadeus runs checks on the isolated copy

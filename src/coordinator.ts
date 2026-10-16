@@ -1391,10 +1391,37 @@ export class Coordinator {
     this.event(id, status, { outcome: outcome.trim(), resultArtifactPath: resultArtifactPath ?? null });
   }
 
+  /** The provider a job was routed to, and the providers installed when it was routed. */
+  private jobRoute(jobId: string): { provider: string | null; installedProviders: string[] } {
+    const note = this.events(jobId).filter((event) => event.kind === "route_selected").at(-1);
+    try {
+      const route = JSON.parse(JSON.parse(String(note?.detail)).detail);
+      return { provider: typeof route.provider === "string" ? route.provider : null,
+        installedProviders: Array.isArray(route.installedProviders) ? route.installedProviders.map(String) : [] };
+    } catch { return { provider: null, installedProviders: [] }; }
+  }
+
+  /** Providers whose usage window is exhausted right now, from recent usage-limit events on any goal. */
+  providersAtUsageLimit(): string[] {
+    const now = this.clock().getTime();
+    const rows = this.db.prepare("SELECT detail FROM goal_events WHERE kind IN ('usage_limit_paused','usage_limit_switched') ORDER BY sequence DESC LIMIT 200")
+      .all() as Array<{ detail: string }>;
+    const limited = new Set<string>();
+    for (const row of rows) {
+      try {
+        const detail = JSON.parse(row.detail);
+        if (detail.provider && detail.resumeAt && Date.parse(detail.resumeAt) > now) limited.add(String(detail.provider));
+      } catch { /* an unreadable event names no provider */ }
+    }
+    return [...limited];
+  }
+
   /**
-   * A provider usage limit is not a failure of the work: pause the goal with the
-   * same step queued again, and record when to retry (the stated reset time, or
-   * a short wait when none is given). It does not count toward progress limits.
+   * A provider usage limit is not a failure of the work. The same step is queued
+   * again; when another installed provider is free, the goal keeps running and
+   * routing skips the limited provider until its reset time. Otherwise the goal
+   * pauses and resumes at the stated reset time (or after a short wait). It does
+   * not count toward progress limits.
    */
   private pauseForUsageLimit(goalId: string, jobId: string, limit: UsageLimit): boolean {
     const goal = this.getGoal(goalId);
@@ -1402,15 +1429,23 @@ export class Coordinator {
     const job = this.getJob(jobId);
     const resumeAt = limit.resetsAt && Date.parse(limit.resetsAt) > this.clock().getTime()
       ? limit.resetsAt : new Date(this.clock().getTime() + DEFAULT_USAGE_LIMIT_WAIT_MS).toISOString();
+    const route = this.jobRoute(jobId);
+    const limited = new Set([...this.providersAtUsageLimit(), ...(route.provider ? [route.provider] : [])]);
+    const switchTo = route.provider && goal.status === "active"
+      ? route.installedProviders.find((provider) => !limited.has(provider)) ?? null : null;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const replacement = this.enqueueGoalIterationLocked(goalId, String(goal.next_objective ?? goal.objective), goal.answer as string | null,
         Number(job.package_stage_iteration ?? job.goal_iteration));
       const timestamp = this.now();
-      this.db.prepare("UPDATE goals SET status='paused', updated_at=? WHERE id=?").run(timestamp, goalId);
-      this.db.prepare("UPDATE jobs SET reservation_released_at=?, updated_at=? WHERE id=? AND status='queued'")
-        .run(timestamp, timestamp, String(replacement!.id));
-      this.goalEvent(goalId, "usage_limit_paused", { jobId, replacementJobId: replacement!.id, resumeAt, matched: limit.matched });
+      if (switchTo) {
+        this.goalEvent(goalId, "usage_limit_switched", { jobId, replacementJobId: replacement!.id, provider: route.provider, switchTo, resumeAt, matched: limit.matched });
+      } else {
+        this.db.prepare("UPDATE goals SET status='paused', updated_at=? WHERE id=?").run(timestamp, goalId);
+        this.db.prepare("UPDATE jobs SET reservation_released_at=?, updated_at=? WHERE id=? AND status='queued'")
+          .run(timestamp, timestamp, String(replacement!.id));
+        this.goalEvent(goalId, "usage_limit_paused", { jobId, replacementJobId: replacement!.id, provider: route.provider, resumeAt, matched: limit.matched });
+      }
       this.db.exec("COMMIT");
       return true;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }

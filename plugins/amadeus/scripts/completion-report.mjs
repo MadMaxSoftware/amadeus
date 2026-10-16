@@ -269,7 +269,8 @@ export async function completionAudit(goalId, paths) {
       : detail.provider === "cursor-browser-login" ? "cursor"
         : `${detail.provider ?? "unidentified provider"}:${detail.model ?? "unidentified"}:${detail.reasoningEffort ?? "unspecified"}`;
     if (!allocationKeys.has(key)) allocationKeys.set(key, {
-      route: detail.provider === "codex-chatgpt-signin" ? "Codex" : detail.provider ?? "unidentified provider",
+      route: detail.provider === "codex-chatgpt-signin" ? "Codex"
+        : detail.provider === "claude-subscription-signin" ? "Claude" : detail.provider ?? "unidentified provider",
       model: detail.model ?? null, reasoningEffort: detail.reasoningEffort ?? null,
       costBasis: "subscription-allowance", completedSteps: 0,
     });

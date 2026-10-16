@@ -193,8 +193,8 @@ export class ClaudeWorkerDriver implements WorkerDriver {
       });
       let lastProgressAt = 0;
       let lastProgressSignature = "";
-      const result = await this.runImplementation(
-        config,
+      const runWith = (runConfig: ClaudeAdapterConfig) => this.runImplementation(
+        runConfig,
         workspace,
         this.paths.objectiveOverride?.trim() || context.objective,
         jobConfigDirectory,
@@ -217,6 +217,16 @@ export class ClaudeWorkerDriver implements WorkerDriver {
           },
         },
       );
+      let result = await runWith(config);
+      // A tier alias Claude Code no longer accepts must not stop the goal: retry
+      // once on Claude Code's own default model, before any work was done.
+      if (result.exitCode !== 0 && !result.timedOut && !result.aborted && config.model
+        && isUnknownClaudeModel(`${result.stdout}\n${result.stderr}`)) {
+        context.progress?.({ phase: "preparing", status: "completed",
+          summary: `Claude did not accept the model "${config.model}"; using Claude Code's default model instead.` });
+        config = { ...config, model: null };
+        result = await runWith(config);
+      }
       persistEvidence({ ...result, captureWorkspace: true });
       if (heartbeatFailure) throw heartbeatFailure;
       if (result.evidenceError) {
@@ -272,4 +282,12 @@ export class ClaudeWorkerDriver implements WorkerDriver {
       clearInterval(heartbeat);
     }
   }
+}
+
+/** Claude Code's refusal of an unknown or unavailable --model value (not a usage limit or work failure). */
+export function isUnknownClaudeModel(output: string): boolean {
+  return /\bmodel\b[^\n]{0,120}\b(?:not found|not available|unknown|invalid|does not exist|is not supported|not_found_error)\b/i.test(output)
+    || /\b(?:invalid|unknown|unsupported) model\b/i.test(output)
+    || /\bnot_found_error\b[^\n]{0,200}\bmodel\b/i.test(output)
+    || /issue with the selected model/i.test(output);
 }
