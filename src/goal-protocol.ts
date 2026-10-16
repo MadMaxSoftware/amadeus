@@ -34,6 +34,8 @@ export type GoalDecision = {
   remainingCriterion?: string | null;
   question: string | null;
   recovery?: { diagnosis: string; nextObjective: string; scope: "same-approved-scope" };
+  /** A blocked decision that hands an already-authorized step back to the originating host. */
+  hostHandoff?: { action: string };
   nextRoute?: { provider: "codex-chatgpt-signin" | "cursor-browser-login" | "claude-subscription-signin"; model: string; reasoningEffort?: string };
   caseId?: string;
   stageRole?: "participant" | "assessor";
@@ -129,7 +131,7 @@ export function parseGoalDecision(raw: string): GoalDecision {
     throw new Error("Goal worker final response must be one JSON object");
   }
   const record = parsed as Record<string, unknown>;
-  const allowed = new Set(["status", "summary", "evidence", "nextObjective", "nextStreamObjective", "remainingCriterion", "question", "recovery", "nextRoute", "caseId", "stageRole"]);
+  const allowed = new Set(["status", "summary", "evidence", "nextObjective", "nextStreamObjective", "remainingCriterion", "question", "recovery", "hostHandoff", "nextRoute", "caseId", "stageRole"]);
   const extra = Object.keys(record).filter((key) => !allowed.has(key));
   if (extra.length) throw new Error(`Goal decision has unsupported fields: ${extra.join(", ")}`);
   if (!(["continue", "complete", "needs_approval", "blocked"] as unknown[]).includes(record.status)) {
@@ -167,6 +169,14 @@ export function parseGoalDecision(raw: string): GoalDecision {
     if (normalizedScope.descriptive) normalizations.push("canonicalized_descriptive_recovery_scope");
     recovery = { diagnosis: requiredText(value.diagnosis, "recovery.diagnosis"), nextObjective: requiredText(value.nextObjective, "recovery.nextObjective"), scope: "same-approved-scope" };
   }
+  let hostHandoff: GoalDecision["hostHandoff"];
+  if (record.hostHandoff !== undefined && record.hostHandoff !== null) {
+    if (status !== "blocked" || typeof record.hostHandoff !== "object" || Array.isArray(record.hostHandoff)) throw new Error("hostHandoff is allowed only for a blocked result");
+    const value = record.hostHandoff as Record<string, unknown>;
+    if (Object.keys(value).some(key => key !== "action")) throw new Error("hostHandoff has unsupported fields");
+    if (recovery) throw new Error("hostHandoff and recovery cannot both be set");
+    hostHandoff = { action: requiredText(value.action, "hostHandoff.action") };
+  }
   let nextRoute: GoalDecision["nextRoute"];
   if (record.nextRoute !== undefined && record.nextRoute !== null) {
     const route = record.nextRoute as Record<string, unknown>;
@@ -187,7 +197,7 @@ export function parseGoalDecision(raw: string): GoalDecision {
     throw new Error("stageRole must be participant or assessor");
   }
   return { status, summary: requiredText(record.summary, "summary"), evidence, nextObjective, nextStreamObjective, question,
-    ...(status === "continue" && remainingCriterion ? { remainingCriterion } : {}), ...(recovery ? { recovery } : {}), ...(nextRoute ? { nextRoute } : {}),
+    ...(status === "continue" && remainingCriterion ? { remainingCriterion } : {}), ...(recovery ? { recovery } : {}), ...(hostHandoff ? { hostHandoff } : {}), ...(nextRoute ? { nextRoute } : {}),
     ...(normalizations.length ? { normalizations } : {}),
     ...(caseId ? { caseId } : {}), ...(stageRole ? { stageRole: stageRole as "participant" | "assessor" } : {}) };
 }
@@ -218,9 +228,9 @@ export function formatGoalIterationObjective(input: {
     ...(input.continuousDevelopment ? ["This is a continuous development stream. Completing this milestone is a checkpoint, not a terminal stop. If the product roadmap has another dependency-safe unfinished milestone, set status=complete and provide its exact next roadmap objective in nextStreamObjective; the coordinator will queue it automatically. Set nextStreamObjective=null for continue, needs_approval and blocked. For complete, populate it only if another dependency-safe roadmap milestone remains; otherwise set it null."] : []),
     "Recoverable technical errors are your implementation work, not owner decisions. Diagnose them, make the smallest in-scope correction, run relevant checks, and continue. During continuous-development or Long-Haul Autopilot work, coordinator defects and routine technical failures are automatically in scope: repair the reusable failure class with ordinary software, verify it, and resume the same unfinished goal without asking for confirmation. If required evidence or tools are preserved in another coordinator worker, treat that as an artifact-handoff problem: use read-only host reconciliation or a package handoff, or dispatch the step against the recorded artifact host; do not stop merely because a fresh isolated worker cannot see the artifact. Missing development tools or declared dependencies are automatically authorized setup work: install or repair them with ordinary software, verify them in the authoritative environment, and if host visibility fails preserve a verified worker-local artifact or try the next safe reconciliation route before stopping. A failed download, install, test, or command is not a blocker while a safe troubleshooting route remains. Do not blindly repeat an unchanged failed operation. Use needs_approval only for a real authority, credential/physical action, external or irreversible action, or product decision, and when you use it ask one concrete plain-language question naming the required action and its purpose. Never stop with only labels such as owner-gated, approval required, or blocked and no actionable question. If an in-scope technical repair requires another bounded step, return continue with that repair-and-verification objective. If this step must stop but you have an evidence-backed in-scope repair plan, return blocked with optional recovery: {\"diagnosis\":\"observed cause\",\"nextObjective\":\"repair and tests, then resume original outcome\",\"scope\":\"same-approved-scope\"}. Omit recovery for unresolved process outcomes, missing authority, or faults you cannot resolve. Never claim the goal finished merely because a repair passed.",
     ...(input.continuousDevelopment ? [LONG_HAUL_AUTH_RECOVERY, STANDING_PROJECT_AUTHORITY] : []),
-    ...(input.continuousDevelopment ? ["If the next remaining work is an already-authorized ordinary-software or browser operation assigned to the origin host, preserve a concrete handoff in evidence and return blocked with nextObjective=null, nextStreamObjective=null and question=null. This ends only the isolated worker, not the authorized project stream: the origin coordinator must record the verified terminal worker result, execute the covered host operations, record authoritative evidence and continue. Do not enqueue another model iteration to prepare or repeat the same host handoff. Do not copy host credentials or perform an operation explicitly reserved to the origin while it is executing there. A connected native provider tool receipt corroborated by authoritative service/database evidence can meet a roadmap criterion; do not invent a mandatory token-extraction script artifact when the approved roadmap permits that native route."] : []),
+    ...(input.continuousDevelopment ? ["If the next remaining work is an already-authorized ordinary-software or browser operation assigned to the origin host, return blocked with hostHandoff={\"action\":\"the exact host-side operation to perform\"}, nextObjective=null, nextStreamObjective=null, question=null and recovery=null, and list the supporting artifacts in evidence. This ends only the isolated worker, not the authorized project stream: the origin coordinator must record the verified terminal worker result, execute the covered host operations, record authoritative evidence and continue. Do not enqueue another model iteration to prepare or repeat the same host handoff. Do not copy host credentials or perform an operation explicitly reserved to the origin while it is executing there. A connected native provider tool receipt corroborated by authoritative service/database evidence can meet a roadmap criterion; do not invent a mandatory token-extraction script artifact when the approved roadmap permits that native route."] : []),
     "Your final response must be exactly one JSON object with no surrounding prose. The recovery field is valid only when status=blocked for a technical same-scope repair; it MUST be null when status=continue, complete, or needs_approval. A continue decision already carries its next bounded work in nextObjective and must never duplicate that work in recovery:",
     "Use ordinary software for deterministic work (searches, tests, builds, transformations) inside this same iteration instead of spending another model turn merely to run a check. A continue decision is valid only when a specific success criterion is still unmet: copy that exact evidence gap into remainingCriterion and make nextObjective the coherent implementation-and-verification milestone that closes it. Never return a vague 'review the next relationship' continuation. Included subscription allowance has no coordinator spending ceiling. Use an inexpensive suitable model first; when the next step needs another available subscription model/provider, add nextRoute: {provider: codex-chatgpt-signin, cursor-browser-login, or claude-subscription-signin, model: available model name, reasoningEffort: supported effort}. Do not change providers for frozen participant/assessor work. Never invent model availability or mark unfinished work complete.",
-    '{"status":"continue|complete|needs_approval|blocked","summary":"what was established","evidence":["specific check or artifact"],"nextObjective":"required only for continue","nextStreamObjective":"only for status complete with another roadmap milestone; otherwise null","remainingCriterion":"exact unmet success-criterion evidence gap; required only for continue","question":"required only for needs_approval","caseId":null,"stageRole":null,"recovery":null,"nextRoute":null}',
+    '{"status":"continue|complete|needs_approval|blocked","summary":"what was established","evidence":["specific check or artifact"],"nextObjective":"required only for continue","nextStreamObjective":"only for status complete with another roadmap milestone; otherwise null","remainingCriterion":"exact unmet success-criterion evidence gap; required only for continue","question":"required only for needs_approval","caseId":null,"stageRole":null,"recovery":null,"hostHandoff":null,"nextRoute":null}',
   ].join("\n\n");
 }

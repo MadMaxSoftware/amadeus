@@ -110,7 +110,7 @@ inventory commands. A user instruction not to scan takes precedence.
   or otherwise needs attention, continuation must remain coordinator-owned. Do not
   switch to direct project commands, browser work, or a model outside the goal's
   recorded routing history. Inspect the preserved evidence and latest decision.
-  If it is an origin-host handoff with no `nextObjective` or owner question,
+  If it is an origin-host handoff (a `hostHandoff.action` on a blocked decision),
   execute that already-authorized host step in the originating turn, record
   authoritative evidence, and continue the same goal; do not call `resume_goal`
   or `start_work` to launch a rediscovery worker. For an actual saved worker
@@ -399,8 +399,8 @@ Standing project authorization: when the owner explicitly preauthorizes operatio
 ## Origin-host handoff ownership
 An already-authorized host operation stays with the origin coordinator. A verified isolated worker may end with a concrete technical handoff and no owner question; the origin must execute covered ordinary-software/browser work, record authoritative evidence, and continue the same project stream. When a worker tool rejects a covered operation, diagnose the rejection, present the durable authorization through the supported route, then use the origin host or another already-authorized route and continue the same goal. A single worker/tool limitation must not end the project stream or trigger a repeat owner question; ask only after existing routes are exhausted and a genuinely human-only action or new authority is required. Do not buy another model turn to reprepare the same handoff, copy host credentials into a concurrent worker, or duplicate an operation reserved to the origin. Accept an approved native connected-tool receipt corroborated by authoritative service/database evidence; do not invent a mandatory private-token extraction or script-artifact gate absent from the roadmap.
 
-When the latest blocked continuous-goal decision contains an origin-host handoff
-but no worker objective and no owner question, report `waiting_on_origin_host`.
+When the latest blocked continuous-goal decision carries a `hostHandoff.action`,
+report `waiting_on_origin_host`.
 `resume_goal` and `start_work` must return the preserved handoff without queueing
 another model. The originating turn performs the host step, records its evidence
 through the coordinator, and then continues or starts the next worker objective.

@@ -548,7 +548,7 @@ function ownerWorkView(coordinator, goalId, includeTechnical = false) {
     message = "Work remains unfinished while the specific owner action shown below is needed.";
     needsFromYou = goal.question;
   } else if (goal.status === "blocked") {
-    if (!String(goal.next_objective ?? "").trim()) {
+    if (coordinator.latestGoalDecision(goalId)?.hostHandoff?.action) {
       state = "waiting_on_origin_host";
       message = "The isolated worker finished and saved the host-side step. Execute that approved handoff from the originating turn; do not launch another worker to rediscover it.";
     } else {
@@ -1699,7 +1699,12 @@ export async function callTool(name, rawArguments, paths = productionPaths, back
   }
   if (name === "complete_external_verification") {
     const jobId = uuid(args.jobId, "jobId");
-    return withCoordinator(paths.database, (c) => c.completeExternallyVerifiedGoalIteration(jobId, text(args.detail, "detail")));
+    // Record what the worker's own verified receipt decided, if one exists, so a
+    // host completion that contradicts a blocked receipt can be reopened later.
+    let receiptDecisionStatus = null;
+    try { receiptDecisionStatus = (await verifyJobReceipt(jobId, paths, true, true))?.goalDecision?.status ?? null; }
+    catch { receiptDecisionStatus = null; }
+    return withCoordinator(paths.database, (c) => c.completeExternallyVerifiedGoalIteration(jobId, text(args.detail, "detail"), receiptDecisionStatus));
   }
   if (name === "preflight_goal" || name === "run_goal") {
     const goalId = uuid(args.goalId);
@@ -2111,9 +2116,9 @@ console.log(JSON.stringify({ fake: true, goalId: value("--goal-id") }));
     return job;
   });
   withCoordinator(database, (coordinator) => coordinator.finishGoalIteration(String(handoffJob.id), "Host evidence remains", undefined, {
-    status: "blocked", summary: "Origin-host handoff: perform authenticated readback",
+    status: "blocked", summary: "Host evidence remains",
     evidence: ["M9_ORIGIN_HOST_HANDOFF.md"], nextObjective: null,
-    nextStreamObjective: null, question: null,
+    nextStreamObjective: null, question: null, hostHandoff: { action: "Perform the authenticated readback" },
   }));
   const handoffView = await callTool("work_status", { goalId: handoffGoalId }, paths);
   if (handoffView.state !== "waiting_on_origin_host" || handoffView.stateLabel !== "Origin-host action"

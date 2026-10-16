@@ -20,6 +20,15 @@
           "required": ["diagnosis", "nextObjective", "scope"] }
       ]
     },
+    "hostHandoff": {
+      "description": "MUST be null unless status=blocked hands an already-authorized step back to the originating host. Never set together with recovery.",
+      "anyOf": [
+        { "type": "null" },
+        { "type": "object", "additionalProperties": false,
+          "properties": { "action": { "type": "string" } },
+          "required": ["action"] }
+      ]
+    },
     "nextRoute": {
       "anyOf": [
         { "type": "null" },
@@ -29,5 +38,5 @@
       ]
     }
   },
-  "required": ["status", "summary", "evidence", "nextObjective", "nextStreamObjective", "remainingCriterion", "question", "caseId", "stageRole", "recovery", "nextRoute"]
+  "required": ["status", "summary", "evidence", "nextObjective", "nextStreamObjective", "remainingCriterion", "question", "caseId", "stageRole", "recovery", "hostHandoff", "nextRoute"]
 }

@@ -625,6 +625,14 @@ export class Coordinator {
     return this.db.prepare("SELECT * FROM goal_events WHERE goal_id=? ORDER BY sequence").all(id) as Record<string, unknown>[];
   }
 
+  /** The latest worker decision recorded for a goal, or null. */
+  latestGoalDecision(id: string): GoalDecision | null {
+    const row = this.db.prepare("SELECT detail FROM goal_events WHERE goal_id=? AND kind='iteration_completed' ORDER BY sequence DESC LIMIT 1").get(id) as { detail: string } | undefined;
+    if (!row) return null;
+    try { return (JSON.parse(String(row.detail)).decision ?? null) as GoalDecision | null; }
+    catch { return null; }
+  }
+
   pauseGoal(id: string): Record<string, unknown> {
     const goal = this.getGoal(id);
     if (goal.status !== "active") throw new Error("only an active goal can be paused");
@@ -668,25 +676,20 @@ export class Coordinator {
       && !goal.current_job_id
       && !String(goal.question ?? "").trim()
       && Boolean(externalVerificationDetail?.jobId)
-      && String(goal.last_summary ?? "").includes("trustworthy strict goal decision with status=blocked")
-      && String(goal.last_summary ?? "").includes("not product or milestone completion")
+      && externalVerificationDetail?.receiptDecisionStatus === "blocked"
       && Number(externalVerificationDetail?.iteration) === Number(goal.current_iteration);
     const originHostHandoff = goal.status === "blocked"
       && Number(goal.continuous_development) === 1
       && !goal.current_job_id
       && !String(goal.question ?? "").trim()
       && lastDecision?.status === "blocked"
-      && !String(lastDecision.nextObjective ?? "").trim()
-      && !String(lastDecision.nextStreamObjective ?? "").trim()
-      && /origin[\s_-]*host[\s_-]*handoff|handoff.{0,60}origin[\s_-]*host/i.test([
-        String(lastDecision.summary ?? ""),
-        ...(Array.isArray(lastDecision.evidence) ? lastDecision.evidence.map(String) : []),
-      ].join("\n"));
+      && Boolean(String((lastDecision.hostHandoff as { action?: unknown } | undefined)?.action ?? "").trim());
     if (originHostHandoff && lastDecision) {
       return {
         ...goal,
         nextAction: "execute_origin_host_handoff_and_continue",
         originHostHandoff: {
+          action: String((lastDecision.hostHandoff as { action: string }).action),
           summary: String(lastDecision.summary ?? goal.last_summary ?? "Execute the preserved host-side step."),
           evidence: Array.isArray(lastDecision.evidence) ? lastDecision.evidence : [],
           reason: "The latest blocked decision has no worker objective or owner question; continue the saved activity on the originating host without queuing another worker.",
@@ -1586,7 +1589,7 @@ export class Coordinator {
     this.event(id, "reconciled", { observed, detail: detail.trim() });
   }
 
-  completeExternallyVerifiedGoalIteration(id: string, detail: string): Record<string, unknown> {
+  completeExternallyVerifiedGoalIteration(id: string, detail: string, receiptDecisionStatus: GoalDecision["status"] | null = null): Record<string, unknown> {
     const job = this.getJob(id);
     if (!job.goal_id) throw new Error("only a goal job can be externally verified");
     const goalId = String(job.goal_id);
@@ -1613,6 +1616,7 @@ export class Coordinator {
       .run(evidence, JSON.stringify([evidence]), timestamp, goalId);
     this.goalEvent(goalId, "iteration_completed_external_verification", {
       jobId: id, iteration: job.goal_iteration, summary: evidence, evidence: [evidence], modelInvokedForReconciliation: false,
+      receiptDecisionStatus,
     });
     return this.getGoal(goalId);
   }
