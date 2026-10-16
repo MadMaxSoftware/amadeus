@@ -70,7 +70,7 @@ test("dependency health reports the active Cursor config instead of dropping its
     registry: {},
   });
   assert.equal(report.cursor.configured, true);
-  const server = readFileSync(join(workerRoot, "plugins", "amadeus", "scripts", "server.mjs"), "utf8");
+  const server = readFileSync(join(workerRoot, "plugins", "amadeus", "scripts", "tool-dispatch.mjs"), "utf8");
   assert.match(server, /cursorWorkerConfigPath:\s*paths\?\.cursorWorkerConfig/);
 });
 

@@ -1,11 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { DEFAULT_USAGE_LIMIT_WAIT_MS, detectUsageLimit, type UsageLimit } from "./provider-limits.ts";
-import { homedir } from "node:os";
-import { parseArgs } from "node:util";
 import { estimateCreditMicros, lunaRateCard, validateUsage, type CodexUsage } from "./usage-accounting.ts";
 import { formatGoalIterationObjective, withRecordedOwnerAuthorization, type GoalDecision } from "./goal-protocol.ts";
 import { hasExplicitAttemptRestriction } from "./technical-recovery.ts";
@@ -15,54 +13,13 @@ import {
   type MilestoneGitAction,
   type MilestoneGitDecision,
 } from "./milestone-git-authorization.ts";
+import { migrateCoordinatorSchema } from "./coordinator-schema.ts";
+import {
+  defaultDatabasePath, parseNonnegativeInteger, projectRootsOverlap, terminalStatuses,
+  type GoalStatus, type JobStatus, type ProgressGuard, type ProgressLimits,
+} from "./coordinator-types.ts";
 
-type JobStatus =
-  | "queued"
-  | "running"
-  | "waiting_question"
-  | "uncertain"
-  | "completed"
-  | "failed"
-  | "blocked_budget";
-
-const terminalStatuses = new Set<JobStatus>(["completed", "failed"]);
-
-type GoalStatus = "active" | "paused" | "waiting_approval" | "uncertain" | "completed" | "blocked" | "budget_limited" | "stopped";
-
-export type ProgressLimits = { consecutiveFailures: number; consecutiveWithoutChange: number; aiCallsPer24h: number };
-export type ProgressGuard = {
-  stop: boolean;
-  reason: string | null;
-  consecutiveFailures: number;
-  consecutiveWithoutChange: number;
-  aiCallsLast24h: number;
-  limits: ProgressLimits;
-};
-
-export function normalizeProjectRoot(root: string): string {
-  return resolve(root).replaceAll("/", "\\").replace(/\\+$/, "").toLowerCase();
-}
-
-export function projectRootsOverlap(left: string | null | undefined, right: string | null | undefined): boolean {
-  if (!left || !right) return true;
-  const a = normalizeProjectRoot(left);
-  const b = normalizeProjectRoot(right);
-  return a === b || a.startsWith(`${b}\\`) || b.startsWith(`${a}\\`);
-}
-
-function defaultDatabasePath(): string {
-  const base = process.env.AMADEUS_HOME
-    ?? join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "Amadeus");
-  return join(base, "coordinator.sqlite");
-}
-
-function parseNonnegativeInteger(value: unknown, label: string): number {
-  const number = Number(value);
-  if (!Number.isSafeInteger(number) || number < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return number;
-}
+export { normalizeProjectRoot, projectRootsOverlap, type ProgressGuard, type ProgressLimits } from "./coordinator-types.ts";
 
 export class Coordinator {
   readonly db: DatabaseSync;
@@ -76,7 +33,7 @@ export class Coordinator {
     // statement. A background worker can briefly retain SQLite's write lock
     // while it finishes cleanup, especially on Windows CI.
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
-    this.migrate();
+    migrateCoordinatorSchema(this.db);
   }
 
   close(): void {
@@ -85,193 +42,6 @@ export class Coordinator {
 
   private now(): string {
     return this.clock().toISOString();
-  }
-
-  private addColumnIfMissing(table: string, column: string, definition: string): void {
-    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-    if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
-
-  private dropColumnIfPresent(table: string, column: string): void {
-    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-    if (columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
-  }
-
-  private migrate(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS jobs (
-        id TEXT PRIMARY KEY,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        objective TEXT NOT NULL,
-        status TEXT NOT NULL,
-        reserved_cents INTEGER NOT NULL DEFAULT 0,
-        worker TEXT,
-        question TEXT,
-        answer TEXT,
-        outcome TEXT,
-        result_artifact_path TEXT,
-        reserved_credit_micros INTEGER NOT NULL DEFAULT 0,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        heartbeat_at TEXT,
-        lease_expires_at TEXT,
-        stop_requested INTEGER NOT NULL DEFAULT 0,
-        reservation_released_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        CHECK (reserved_cents >= 0)
-      );
-      CREATE TABLE IF NOT EXISTS events (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_id TEXT,
-        kind TEXT NOT NULL,
-        detail TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (job_id) REFERENCES jobs(id)
-      );
-      CREATE TABLE IF NOT EXISTS usage_records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_id TEXT NOT NULL,
-        attempt INTEGER NOT NULL,
-        model TEXT NOT NULL,
-        input_tokens INTEGER NOT NULL,
-        cached_input_tokens INTEGER NOT NULL,
-        cache_write_input_tokens INTEGER NOT NULL,
-        output_tokens INTEGER NOT NULL,
-        reasoning_output_tokens INTEGER NOT NULL,
-        estimated_credit_micros INTEGER NOT NULL,
-        reserved_credit_micros INTEGER NOT NULL,
-        actual_provider_credit_micros INTEGER,
-        rate_card_source TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(job_id, attempt),
-        FOREIGN KEY (job_id) REFERENCES jobs(id)
-      );
-      CREATE TABLE IF NOT EXISTS patch_receipts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_id TEXT NOT NULL,
-        attempt INTEGER NOT NULL,
-        patch_path TEXT NOT NULL,
-        patch_sha256 TEXT NOT NULL,
-        patch_bytes INTEGER NOT NULL,
-        changed_files INTEGER NOT NULL,
-        changed_lines INTEGER NOT NULL,
-        checkpoint_receipt TEXT,
-        applied INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        UNIQUE(job_id, attempt),
-        FOREIGN KEY (job_id) REFERENCES jobs(id)
-      );
-      CREATE TABLE IF NOT EXISTS goals (
-        id TEXT PRIMARY KEY,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        objective TEXT NOT NULL,
-        success_criteria TEXT NOT NULL,
-        constraints_text TEXT NOT NULL,
-        status TEXT NOT NULL,
-        iteration_reserve_credit_micros INTEGER NOT NULL,
-        budget_credit_micros INTEGER NOT NULL,
-        current_iteration INTEGER NOT NULL DEFAULT 0,
-        current_job_id TEXT,
-        question TEXT,
-        answer TEXT,
-        last_summary TEXT,
-        last_evidence TEXT,
-        next_objective TEXT,
-        continuous_development INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (current_job_id) REFERENCES jobs(id),
-        CHECK (iteration_reserve_credit_micros > 0),
-        CHECK (budget_credit_micros >= iteration_reserve_credit_micros)
-      );
-      CREATE TABLE IF NOT EXISTS goal_events (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        goal_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        detail TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (goal_id) REFERENCES goals(id)
-      );
-      CREATE TABLE IF NOT EXISTS goal_git_approvals (
-        id TEXT PRIMARY KEY,
-        goal_id TEXT NOT NULL,
-        goal_revision INTEGER NOT NULL,
-        source_revision TEXT NOT NULL,
-        action TEXT NOT NULL,
-        decision TEXT NOT NULL,
-        target_branch TEXT,
-        target_remote TEXT,
-        target_remote_url TEXT,
-        patch_digest TEXT,
-        changed_paths_digest TEXT,
-        authority_event_id TEXT,
-        authority_actor_id TEXT,
-        authority_channel TEXT,
-        provenance_verified INTEGER NOT NULL DEFAULT 0,
-        grant_scope TEXT NOT NULL DEFAULT 'single_use',
-        consumption TEXT NOT NULL DEFAULT 'available',
-        approval_reference TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (goal_id) REFERENCES goals(id),
-        CHECK (goal_revision > 0),
-        CHECK (action IN ('commit', 'push')),
-        CHECK (decision IN ('allow', 'deny'))
-      );
-      INSERT OR IGNORE INTO settings(key, value) VALUES
-        ('paused', 'true'),
-        ('spending_limit_cents', '0'),
-        ('credit_limit_per_job_micros', '0'),
-        ('credit_limit_daily_micros', '0'),
-        ('credit_limit_weekly_micros', '0'),
-        ('progress_failure_limit', '3'),
-        ('progress_idle_limit', '6'),
-        ('daily_ai_call_limit', '60'),
-        ('schema_version', '1');
-    `);
-    this.addColumnIfMissing("jobs", "reserved_credit_micros", "INTEGER NOT NULL DEFAULT 0");
-    this.addColumnIfMissing("jobs", "attempt_count", "INTEGER NOT NULL DEFAULT 0");
-    this.addColumnIfMissing("jobs", "heartbeat_at", "TEXT");
-    this.addColumnIfMissing("jobs", "lease_expires_at", "TEXT");
-    this.addColumnIfMissing("jobs", "stop_requested", "INTEGER NOT NULL DEFAULT 0");
-    this.addColumnIfMissing("jobs", "reservation_released_at", "TEXT");
-    this.addColumnIfMissing("jobs", "result_artifact_path", "TEXT");
-    this.addColumnIfMissing("jobs", "goal_id", "TEXT");
-    this.addColumnIfMissing("jobs", "goal_iteration", "INTEGER");
-    this.addColumnIfMissing("jobs", "package_stage_iteration", "INTEGER");
-    this.addColumnIfMissing("jobs", "iteration_objective", "TEXT");
-    this.addColumnIfMissing("goals", "project_root", "TEXT");
-    this.addColumnIfMissing("goals", "continuous_development", "INTEGER NOT NULL DEFAULT 0");
-    this.addColumnIfMissing("goals", "goal_revision", "INTEGER NOT NULL DEFAULT 1");
-    this.addColumnIfMissing("goal_git_approvals", "target_remote_url", "TEXT");
-    this.addColumnIfMissing("goal_git_approvals", "patch_digest", "TEXT");
-    this.addColumnIfMissing("goal_git_approvals", "changed_paths_digest", "TEXT");
-    this.addColumnIfMissing("goal_git_approvals", "authority_event_id", "TEXT");
-    this.addColumnIfMissing("goal_git_approvals", "authority_actor_id", "TEXT");
-    this.addColumnIfMissing("goal_git_approvals", "authority_channel", "TEXT");
-    this.addColumnIfMissing("goal_git_approvals", "provenance_verified", "INTEGER NOT NULL DEFAULT 0");
-    this.addColumnIfMissing("goal_git_approvals", "grant_scope", "TEXT NOT NULL DEFAULT 'single_use'");
-    this.addColumnIfMissing("goal_git_approvals", "consumption", "TEXT NOT NULL DEFAULT 'available'");
-    this.db.exec("UPDATE jobs SET package_stage_iteration=goal_iteration WHERE goal_id IS NOT NULL AND package_stage_iteration IS NULL");
-    this.db.exec("CREATE INDEX IF NOT EXISTS jobs_goal_id ON jobs(goal_id); CREATE INDEX IF NOT EXISTS goal_events_goal_id ON goal_events(goal_id);");
-    this.db.exec("CREATE INDEX IF NOT EXISTS goal_git_approvals_binding ON goal_git_approvals(goal_id, goal_revision, source_revision);");
-    // Schema 3 drops the removed evaluation profile's case column.
-    this.dropColumnIfPresent("goals", "expected_case_id");
-    this.db.prepare("UPDATE settings SET value='3' WHERE key='schema_version'").run();
-    this.db.prepare(`
-      UPDATE jobs SET reservation_released_at=updated_at
-      WHERE status IN ('completed', 'failed', 'blocked_budget') AND reservation_released_at IS NULL
-    `).run();
-    // A queued iteration belonging to a paused goal is prepared work, not an
-    // active reservation. Claiming it later re-opens the reservation.
-    this.db.prepare(`
-      UPDATE jobs SET reservation_released_at=updated_at
-      WHERE status='queued' AND reservation_released_at IS NULL
-        AND goal_id IN (SELECT id FROM goals WHERE status='paused')
-    `).run();
   }
 
   private setting(key: string): string {
@@ -1665,98 +1435,7 @@ export class Coordinator {
   }
 }
 
-function optionString(values: Record<string, unknown>, name: string): string {
-  const value = values[name];
-  if (typeof value !== "string" || !value.trim()) throw new Error(`--${name} is required`);
-  return value;
-}
-
-function main(): void {
-  const command = process.argv[2] ?? "status";
-  const { values } = parseArgs({
-    args: process.argv.slice(3),
-    options: {
-      db: { type: "string" }, id: { type: "string" }, objective: { type: "string" },
-      "idempotency-key": { type: "string" }, "reserve-cents": { type: "string" },
-      "limit-cents": { type: "string" }, worker: { type: "string" }, text: { type: "string" },
-      observed: { type: "string" }, "reserve-credits": { type: "string" },
-      "budget-credits": { type: "string" }, "success-criteria": { type: "string" }, constraints: { type: "string" },
-      "per-job-credits": { type: "string" }, "daily-credits": { type: "string" },
-      "weekly-credits": { type: "string" }, "lease-seconds": { type: "string" },
-      "failure-limit": { type: "string" }, "idle-limit": { type: "string" }, "daily-ai-calls": { type: "string" }
-    },
-    strict: true
-  });
-  const coordinator = new Coordinator(values.db as string | undefined);
-  try {
-    let result: unknown = { ok: true };
-    if (command === "init") {
-      if (values["limit-cents"] !== undefined) coordinator.configureSpendingLimit(parseNonnegativeInteger(values["limit-cents"], "limit"));
-      result = coordinator.status();
-    } else if (command === "submit") {
-      result = coordinator.submit({
-        objective: optionString(values, "objective"),
-        idempotencyKey: optionString(values, "idempotency-key"),
-        reserveCents: parseNonnegativeInteger(values["reserve-cents"] ?? 0, "reservation"),
-        reserveCredits: Number(values["reserve-credits"] ?? 0),
-      });
-    } else if (command === "status") result = coordinator.status(values.id as string | undefined);
-    else if (command === "goal-create") result = coordinator.createGoal({
-      objective: optionString(values, "objective"),
-      successCriteria: optionString(values, "success-criteria"),
-      constraints: optionString(values, "constraints"),
-      idempotencyKey: optionString(values, "idempotency-key"),
-      reserveCredits: Number(optionString(values, "reserve-credits")),
-      budgetCredits: Number(optionString(values, "budget-credits")),
-    });
-    else if (command === "goals") result = coordinator.goals(values.id as string | undefined);
-    else if (command === "goal-events") result = coordinator.goalEvents(optionString(values, "id"));
-    else if (command === "goal-pause") result = coordinator.pauseGoal(optionString(values, "id"));
-    else if (command === "goal-resume") result = coordinator.resumeGoal(optionString(values, "id"));
-    else if (command === "goal-retry") result = coordinator.retryFailedGoal(optionString(values, "id"), optionString(values, "text"));
-    else if (command === "goal-answer") result = coordinator.answerGoal(optionString(values, "id"), optionString(values, "text"));
-    else if (command === "goal-stop") result = coordinator.stopGoal(optionString(values, "id"), optionString(values, "text"));
-    else if (command === "goal-recover-stalled") result = coordinator.requestStalledIterationRecovery(optionString(values, "id"), optionString(values, "text"));
-    else if (command === "usage") result = coordinator.usage(values.id as string | undefined);
-    else if (command === "patches") result = coordinator.patchReceipts(values.id as string | undefined);
-    else if (command === "pause") coordinator.pause();
-    else if (command === "resume") coordinator.resume();
-    else if (command === "claim") result = coordinator.claim(optionString(values, "worker"), parseNonnegativeInteger(values["lease-seconds"] ?? 600, "lease"));
-    else if (command === "heartbeat") result = coordinator.heartbeat(optionString(values, "id"), optionString(values, "worker"), parseNonnegativeInteger(values["lease-seconds"] ?? 600, "lease"));
-    else if (command === "expire-stale") result = { expired: coordinator.expireStale() };
-    else if (command === "stop-now") result = { stopping: coordinator.stopNow(optionString(values, "text")) };
-    else if (command === "acknowledge-stopped") coordinator.acknowledgeStopped(optionString(values, "id"), optionString(values, "text"));
-    else if (command === "ask") coordinator.ask(optionString(values, "id"), optionString(values, "text"));
-    else if (command === "answer") coordinator.answer(optionString(values, "id"), optionString(values, "text"));
-    else if (command === "uncertain") coordinator.uncertain(optionString(values, "id"), optionString(values, "text"));
-    else if (command === "reconcile") {
-      const observed = optionString(values, "observed");
-      if (!["completed", "blocked", "failed", "queued"].includes(observed)) throw new Error("--observed must be completed, blocked, failed, or queued");
-      coordinator.reconcile(optionString(values, "id"), observed as "completed" | "blocked" | "failed" | "queued", optionString(values, "text"));
-    } else if (command === "complete" || command === "fail") {
-      coordinator.finish(optionString(values, "id"), command === "complete" ? "completed" : "failed", optionString(values, "text"));
-    } else if (command === "limit") {
-      coordinator.configureSpendingLimit(parseNonnegativeInteger(optionString(values, "limit-cents"), "limit"));
-      result = coordinator.status();
-    } else if (command === "progress-limits") {
-      result = coordinator.configureProgressLimits({
-        consecutiveFailures: values["failure-limit"] === undefined ? undefined : Number(values["failure-limit"]),
-        consecutiveWithoutChange: values["idle-limit"] === undefined ? undefined : Number(values["idle-limit"]),
-        aiCallsPer24h: values["daily-ai-calls"] === undefined ? undefined : Number(values["daily-ai-calls"]),
-      });
-    } else if (command === "credit-limits") {
-      coordinator.configureCreditLimits({
-        perJob: Number(optionString(values, "per-job-credits")),
-        daily: Number(optionString(values, "daily-credits")),
-        weekly: Number(optionString(values, "weekly-credits")),
-      });
-      result = coordinator.status();
-    } else throw new Error(`Unknown command: ${command}`);
-    console.log(JSON.stringify(result, null, 2));
-  } finally {
-    coordinator.close();
-  }
-}
-
 // pathToFileURL matches import.meta.url on every platform, including paths with spaces.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void import("./coordinator-cli.ts").then(({ main }) => main());
+}

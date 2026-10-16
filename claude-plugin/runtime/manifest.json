@@ -1,5 +1,5 @@
 {
-  "package.json": "0d84e47fcac228d9bc6a5d1d60dde9a8870a06bd0c26a6f14cc070830940c5b3",
+  "package.json": "94256b283eef4ee4eb699d06c5721e1b9f39ec7d1538f92b575621eb3b98dd39",
   "src/backup-policy.ts": "93f0b100de7cd2019dff9d84170490f537351cc3460bcf7f2c16503cba248a36",
   "src/claude-adapter.ts": "3797e6c9b0605d46b0dbfc65495047efee59e7c91e56fd54bf1f8ac35476caf3",
   "src/claude-path-verifier-shim.cjs": "70b6f5dcc7b2a3e32d40c529cc9dcae7bdb6c3cf1009eb0c715043e8e37ab771",
@@ -8,7 +8,10 @@
   "src/claude-worker-driver.ts": "9afa6267769538e20681b713da0b0cbe5aa497608319bb6bde696ee190150f86",
   "src/codex-adapter.ts": "3fe70574d7326c313a344ec72ba17252cb728506927d1347c9c5ad3f80906bff",
   "src/codex-worker-driver.ts": "0398bc63a6a497b96987926c126b831ee8feb27f59dca4d18a294e1069cb461b",
-  "src/coordinator.ts": "dda97b14cef4ac4a2ac1c81d39cc1ee016f74ac7da0fab9345814338b7c49874",
+  "src/coordinator-cli.ts": "dd3332cbd7b3aa819c91674582845e76c5676d88fbf7f2684dd9ffde19fc88ea",
+  "src/coordinator-schema.ts": "e6dc1ffd1b6053461a73f0655cb37658ac373accbb55dd0ccd7be762b4caf83c",
+  "src/coordinator-types.ts": "3313c949610a45d86d2d19a3a3d27b5283d8d4325be895fbf20543042f68ac48",
+  "src/coordinator.ts": "8b22f277a74cabd31b8d3ba59755f52fc0d270e7a79c2e2574145f9063d6d04b",
   "src/cursor-adapter.ts": "85658cb4078771889104142dd11d80f3783fee01f27a7c9b989e30179fab10c6",
   "src/cursor-path-verifier-shim.cjs": "94452ba9447ea444c57814dac6129cca4f14126e391520f7531ef3b740aa4148",
   "src/cursor-project-scope-acceptance.mjs": "d22a579183e22a22af9bf8a6d64241d0c3b3ac8dfcd6a58c0bed39c63f5ed2a8",
