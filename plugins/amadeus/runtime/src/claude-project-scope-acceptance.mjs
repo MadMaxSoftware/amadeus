@@ -101,8 +101,11 @@ const protectedRoot = config.protectedPaths.find((path) => existsSync(path) && s
 if (!protectedRoot) throw new Error("At least one existing protected directory is required");
 const protectedSentinel = join(protectedRoot, `.amadeus-protected-${token}.txt`);
 writeFileSync(protectedSentinel, `protected-${token}`, { flag: "wx" });
-const outsideAccountDirectory = config.deniedParentPaths.find((path) => existsSync(path) && statSync(path).isDirectory());
-if (!outsideAccountDirectory) throw new Error("At least one existing denied parent directory is required");
+const deniedDirectories = config.deniedParentPaths.filter((path) => existsSync(path) && statSync(path).isDirectory());
+if (deniedDirectories.length === 0) throw new Error("At least one existing denied parent directory is required");
+// Development workers may read the registered project, the workspace .git and
+// its isolation receipt (as Codex development workers do); writes stay denied.
+const developmentMode = config.developmentMode === true;
 
 const before = {
   approved: approvedExisted ? sha256File(approvedPath) : null,
@@ -111,7 +114,7 @@ const before = {
 const payload = Buffer.from(JSON.stringify({
   workspaceReadProbe, workspaceReadProbeHash: sha256File(workspaceReadProbe), authoritativeReadProbe,
   authenticationSentinel, authenticationSentinelHash: sha256File(authenticationSentinel),
-  approvedPath, unapprovedPath, protectedSentinel, outsideAccountDirectory,
+  approvedPath, unapprovedPath, protectedSentinel, deniedDirectories,
   gitHead, workspaceReceipt, runtimePath, runtimeNeighbor,
 }), "utf8").toString("base64");
 const probe = String.raw`
@@ -130,8 +133,11 @@ $stream = $null
 try { $stream = [IO.File]::Open([string]$p.authoritativeReadProbe, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite) } catch { $sourceWriteDenied = $true } finally { if ($stream) { $stream.Dispose() } }
 $protectedDenied = $false
 try { Get-Content -Raw -LiteralPath ([string]$p.protectedSentinel) | Out-Null } catch { $protectedDenied = $true }
-$parentDenied = $false
-try { Get-ChildItem -LiteralPath ([string]$p.outsideAccountDirectory) -Force | Out-Null } catch { $parentDenied = $true }
+$deniedReadable = @()
+foreach ($directory in @($p.deniedDirectories)) {
+  try { Get-ChildItem -LiteralPath ([string]$directory) -Force -ErrorAction Stop | Out-Null; $deniedReadable += [string]$directory } catch {}
+}
+$parentDenied = ($deniedReadable.Count -eq 0)
 $gitReadDenied = $false
 try { Get-Content -Raw -LiteralPath ([string]$p.gitHead) | Out-Null } catch { $gitReadDenied = $true }
 $receiptReadDenied = $false
@@ -147,7 +153,7 @@ $runtimeWriteError = $null
 $runtimeNeighborDenied = $true
 try { Set-Content -LiteralPath ([string]$p.runtimePath) -Value 'runtime' } catch { $runtimeWriteSucceeded = $false; $runtimeWriteError = $_.Exception.Message }
 try { Set-Content -LiteralPath ([string]$p.runtimeNeighbor) -Value 'escape'; $runtimeNeighborDenied = $false } catch {}
-[ordered]@{ registeredReadsSucceeded=$readSucceeded; authenticationDirectoryReadAllowed=$authenticationReadSucceeded; authoritativeRepositoryDenied=$authoritativeReadDenied; assignedWorkspaceWriteSucceeded=$assignedWriteSucceeded; unapprovedWorkspaceWriteDenied=$unapprovedDenied; authoritativeRepositoryWritesDenied=$sourceWriteDenied; protectedPathDenied=$protectedDenied; parentPathDenied=$parentDenied; gitHistoryReadDenied=$gitReadDenied; isolationReceiptReadDenied=$receiptReadDenied; gitHistoryWriteDenied=$gitWriteDenied; isolationReceiptWriteDenied=$receiptWriteDenied; runtimeWriteSucceeded=$runtimeWriteSucceeded; runtimeWriteError=$runtimeWriteError; runtimeNeighborDenied=$runtimeNeighborDenied } | ConvertTo-Json -Compress
+[ordered]@{ registeredReadsSucceeded=$readSucceeded; authenticationDirectoryReadAllowed=$authenticationReadSucceeded; authoritativeRepositoryDenied=$authoritativeReadDenied; assignedWorkspaceWriteSucceeded=$assignedWriteSucceeded; unapprovedWorkspaceWriteDenied=$unapprovedDenied; authoritativeRepositoryWritesDenied=$sourceWriteDenied; protectedPathDenied=$protectedDenied; parentPathDenied=$parentDenied; deniedPathsReadable=@($deniedReadable); gitHistoryReadDenied=$gitReadDenied; isolationReceiptReadDenied=$receiptReadDenied; gitHistoryWriteDenied=$gitWriteDenied; isolationReceiptWriteDenied=$receiptWriteDenied; runtimeWriteSucceeded=$runtimeWriteSucceeded; runtimeWriteError=$runtimeWriteError; runtimeNeighborDenied=$runtimeNeighborDenied } | ConvertTo-Json -Compress
 `;
 
 let result;
@@ -180,14 +186,14 @@ const workspaceRestored = before.approved === after.approved && before.workspace
 const passed = execution?.status === 0 && !execution.error && [
   result.registeredReadsSucceeded,
   result.authenticationDirectoryReadAllowed,
-  result.authoritativeRepositoryDenied,
+  developmentMode ? result.authoritativeRepositoryDenied === false : result.authoritativeRepositoryDenied,
   result.assignedWorkspaceWriteSucceeded,
   result.unapprovedWorkspaceWriteDenied,
   result.authoritativeRepositoryWritesDenied,
   result.protectedPathDenied,
   result.parentPathDenied,
-  result.gitHistoryReadDenied,
-  result.isolationReceiptReadDenied,
+  developmentMode || result.gitHistoryReadDenied,
+  developmentMode || result.isolationReceiptReadDenied,
   result.gitHistoryWriteDenied,
   result.isolationReceiptWriteDenied,
   result.runtimeWriteSucceeded,
@@ -211,7 +217,8 @@ const receipt = {
   isolationEnvelopeSha256: claudeIsolationEnvelopeSha256(config, workspace),
   ...security,
   workspace,
-  authoritativeRepositoryDenied: true,
+  developmentMode,
+  authoritativeRepositoryDenied: !developmentMode,
   registeredProjectReadsAllowed: true,
   unassignedProjectWritesDenied: true,
   protectedPathsDenied: true,
@@ -219,8 +226,11 @@ const receipt = {
   writableWorkspacePaths: writablePaths,
   outsideWorkspaceWritesDenied: true,
   unapprovedWorkspaceWritesDenied: true,
-  gitHistoryDenied: true,
-  isolationReceiptDenied: true,
+  gitHistoryDenied: !developmentMode,
+  isolationReceiptDenied: !developmentMode,
+  gitHistoryWritesDenied: true,
+  isolationReceiptWritesDenied: true,
+  deniedPathsProbed: deniedDirectories.length,
   containmentExecutable: config.containmentExecutable,
   containmentProfile: config.containmentProfile,
   containmentWindowsSandbox: config.containmentWindowsSandbox,

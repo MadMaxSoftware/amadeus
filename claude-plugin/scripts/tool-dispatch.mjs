@@ -167,6 +167,14 @@ export async function waitForWorkUpdate(goalId, afterCursor, timeoutSeconds, pat
       : (snapshot?.message ?? "No meaningful stage change was recorded during this wait.") };
 }
 
+/** The subscription provider the host chat runs on, from this plugin package's manifest. */
+export function hostProvider() {
+  const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  if (existsSync(join(pluginRoot, ".claude-plugin", "plugin.json"))) return "claude-subscription-signin";
+  if (existsSync(join(pluginRoot, ".codex-plugin", "plugin.json"))) return "codex-chatgpt-signin";
+  return "unknown";
+}
+
 export async function callTool(name, rawArguments, paths = productionPaths, backgroundOwner = null) {
   const args = object(rawArguments ?? {});
   if (name.startsWith("amadeus_")) {
@@ -597,6 +605,7 @@ export async function callTool(name, rawArguments, paths = productionPaths, back
         "--goal-package", packagePath,
         "--operations-config", temporaryOperations, "--worker-config", temporaryWorker,
         "--cursor-worker-config", operations.dispatch.provider === "cursor-browser-login" ? temporaryWorker : paths.cursorWorkerConfig,
+        "--host-provider", hostProvider(),
       ], dirname(paths.supervisor), activeRunForGoal(paths.database, goalId)?.directory ?? temporaryRoot);
       return {
         preflight,

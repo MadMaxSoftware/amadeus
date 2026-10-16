@@ -1,4 +1,5 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -60,5 +61,94 @@ export function portableWorkerConfig(config: Record<string, any>, sourceRoot: st
     protectedPaths: config.protectedPaths?.length ? config.protectedPaths : ['.git', '.env', '.ssh', '.aws', '.codex'].map(path => join(source, path)),
     deniedSensitivePaths: config.deniedSensitivePaths ?? defaultSensitivePaths(homedir(), source, present),
     deniedSourceRoot: source,
+  };
+}
+
+function executableFolder(path: string): string {
+  return dirname(resolve(path));
+}
+
+/** The signed-in Claude Code executable installed for this user, or null. */
+export function findClaudeExecutable(environment: NodeJS.ProcessEnv = process.env, present: (path: string) => boolean = existsSync): string | null {
+  const explicit = environment.CLAUDE_EXECUTABLE?.trim();
+  if (explicit && isAbsolute(explicit) && present(explicit)) return resolve(explicit);
+  const roaming = environment.APPDATA ?? (environment.USERPROFILE ? join(environment.USERPROFILE, 'AppData', 'Roaming') : null);
+  const candidate = roaming ? join(roaming, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe') : null;
+  return candidate && present(candidate) ? candidate : null;
+}
+
+/**
+ * Copy the Claude executable into the Amadeus state folder. The contained
+ * worker may read its executable's folder; staging keeps that grant away from
+ * the user's global npm folder (which also holds other tools' files).
+ */
+export function stageClaudeExecutable(source: string, stateRoot: string): string {
+  const digest = createHash('sha256').update(readFileSync(source)).digest('hex');
+  const destination = join(stateRoot, 'software-runtime-homes', 'claude-code', digest.slice(0, 16), 'claude.exe');
+  if (!existsSync(destination)) {
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(source, destination);
+  }
+  if (createHash('sha256').update(readFileSync(destination)).digest('hex') !== digest) throw new Error('Staged Claude executable hash mismatch');
+  return destination;
+}
+
+/**
+ * A complete Claude worker config for one development goal, derived from the
+ * same project scope as a Codex worker. Claude runs inside the Codex CLI's MXC
+ * sandbox (`codex sandbox`), so a local Codex executable is still required on
+ * Windows; no Cursor configuration is needed.
+ */
+export function portableClaudeConfig(config: Record<string, any>, sourceRoot: string, options: {
+  stateRoot: string; claudeExecutable?: string | null; codex?: Record<string, any>;
+  environment?: NodeJS.ProcessEnv; exists?: (path: string) => boolean;
+}): Record<string, any> {
+  const present = options.exists ?? existsSync;
+  const codex = options.codex ?? portableWorkerConfig({}, sourceRoot, { exists: present });
+  const source = options.claudeExecutable ?? (config.executable && isAbsolute(config.executable) && present(config.executable)
+    ? config.executable : findClaudeExecutable(options.environment, present));
+  if (!source) throw new Error('A signed-in Claude Code installation is required for the Claude route.');
+  const executable = resolve(source).startsWith(resolve(options.stateRoot)) ? resolve(source) : stageClaudeExecutable(source, options.stateRoot);
+  const home = homedir();
+  const providerRoot = join(options.stateRoot, 'providers', 'claude');
+  const containedAppData = join(providerRoot, 'appdata');
+  const containedUserProfile = join(providerRoot, 'profile');
+  // An always-present folder outside the project that the acceptance check
+  // proves unreadable, even on a machine with none of the sensitive folders.
+  const denyProbe = join(providerRoot, 'deny-probe');
+  for (const directory of [containedAppData, containedUserProfile, denyProbe]) mkdirSync(directory, { recursive: true });
+  const configurationDirectory = config.configurationDirectory && isAbsolute(config.configurationDirectory)
+    ? resolve(config.configurationDirectory) : join(home, '.claude');
+  // Claude's policy starts from "deny everything" and lists exceptions, so its
+  // deny list names folders outside the project. Use the same credential and
+  // personal folders a Codex worker is denied, minus Claude's own sign-in folder.
+  const keep = (path: string) => {
+    const key = resolve(path).toLowerCase();
+    const needed = [configurationDirectory, executableFolder(source), options.stateRoot].map((item) => resolve(item).toLowerCase());
+    return needed.some((item) => item === key || item.startsWith(`${key}${sep}`));
+  };
+  const deniedParentPaths = [denyProbe, ...(codex.deniedSensitivePaths ?? defaultSensitivePaths(home, sourceRoot, present))
+    .filter((path: string) => !keep(path))];
+  return {
+    ...config,
+    schemaVersion: 1,
+    enabled: true, dispatchAuthorized: true, implementationPrepared: true, implementationDispatchAuthorized: true,
+    automaticStartup: false, readOnlyOnly: false, developmentMode: true,
+    executable, executableArguments: [],
+    containmentExecutable: codex.executable, containmentProfile: 'claude_contained', containmentWindowsSandbox: 'mxc',
+    containedAppData, containedUserProfile, containedUsername: config.containedUsername || 'amadeus-worker',
+    userInfoShim: join(import.meta.dirname, 'claude-windows-userinfo-shim.cjs'),
+    pathVerifierShim: join(import.meta.dirname, 'claude-path-verifier-shim.cjs'),
+    authentication: 'subscription-signin', apiKeyAuthenticationAllowed: false, spendingRouteReviewed: true,
+    outputFormat: 'stream-json',
+    configurationDirectory,
+    runtimeConfigurationRoot: config.runtimeConfigurationRoot ?? join(containedAppData, 'runtime'),
+    maximumRuntimeSeconds: config.maximumRuntimeSeconds ?? codex.maximumRuntimeSeconds ?? 1800,
+    maximumIdleSeconds: config.maximumIdleSeconds ?? 180,
+    deniedSourceRoot: codex.deniedSourceRoot, assignedProjectRoot: codex.assignedProjectRoot,
+    readableProjectRoots: codex.readableProjectRoots, deniedParentPaths,
+    protectedPaths: codex.protectedPaths,
+    isolationAcceptanceHarness: join(import.meta.dirname, 'claude-project-scope-acceptance.mjs'),
+    isolationSecurityStateProbe: config.isolationSecurityStateProbe ?? codex.isolationSecurityStateProbe,
   };
 }

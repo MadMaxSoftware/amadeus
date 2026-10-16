@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   assertClaudeImplementationDispatchAllowed,
   parseClaudeResult,
@@ -13,6 +13,7 @@ import { parseGoalDecision } from "./goal-protocol.ts";
 import { captureWorkerPatch } from "./worker-patch.ts";
 import { prepareWorkspaceIsolationAcceptance } from "./workspace-isolation-acceptance.ts";
 import { prepareWorkspaceRuntimeRoot, WORKER_RUNTIME_DIRECTORY } from "./worker-runtime-layout.ts";
+import { portableClaudeConfig } from "./portable-runtime.ts";
 
 export type ClaudeProgress = {
   phase: "preparing" | "analysis" | "command" | "edit" | "research" | "reporting";
@@ -142,6 +143,11 @@ export class ClaudeWorkerDriver implements WorkerDriver {
 
   async run(context: WorkerContext): Promise<WorkerResult> {
     let config = JSON.parse(readFileSync(this.paths.config, "utf8")) as ClaudeAdapterConfig;
+    // Development goals bind Claude to the same project scope as a Codex worker;
+    // no separately prepared Claude (or Cursor) configuration is needed.
+    if (config.developmentMode) {
+      config = portableClaudeConfig(config, config.deniedSourceRoot, { stateRoot: dirname(resolve(this.paths.artifactRoot)) }) as ClaudeAdapterConfig;
+    }
     const workspaceId = `${context.jobId}-a${context.attempt}`;
     const { workspace } = materializeWorkspace({
       manifestPath: this.paths.manifest,
@@ -150,6 +156,12 @@ export class ClaudeWorkerDriver implements WorkerDriver {
     });
     config = { ...config, runtimeConfigurationRoot: prepareWorkspaceRuntimeRoot(workspace) };
     const jobConfigDirectory = resolve(join(config.runtimeConfigurationRoot, `${workspaceId}.claude-config`));
+    if (config.developmentMode) {
+      // Command tools create profile folders (AppData etc.); give each job its own
+      // writable profile inside its runtime folder instead of a shared one.
+      config = { ...config, containedUserProfile: join(jobConfigDirectory, "profile") };
+      mkdirSync(config.containedUserProfile, { recursive: true });
+    }
     mkdirSync(this.paths.artifactRoot, { recursive: true });
     const resultArtifactPath = resolve(join(this.paths.artifactRoot, `${workspaceId}.claude-result.jsonl`));
     const stderrArtifactPath = resolve(join(this.paths.artifactRoot, `${workspaceId}.claude-stderr.txt`));

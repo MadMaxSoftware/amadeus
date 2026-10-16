@@ -46,6 +46,8 @@ export type ClaudeAdapterConfig = {
   writeIsolationVerified?: boolean;
   writeIsolationReceipt?: string | null;
   developmentMode?: boolean;
+  /** Shared with Codex workers: may a development worker run commands (default true). */
+  workerCommandsEnabled?: boolean;
   isolationAcceptanceHarness?: string | null;
   isolationSecurityStateProbe?: string | null;
 };
@@ -69,8 +71,13 @@ export type ClaudeWriteIsolationReceipt = {
   authoritativeRepositoryDenied: boolean;
   outsideWorkspaceWritesDenied: true;
   unapprovedWorkspaceWritesDenied: true;
-  gitHistoryDenied: true;
-  isolationReceiptDenied: true;
+  /** False for development workers, which may read .git and the receipt (writes stay denied). */
+  gitHistoryDenied: boolean;
+  isolationReceiptDenied: boolean;
+  developmentMode?: boolean;
+  gitHistoryWritesDenied?: true;
+  isolationReceiptWritesDenied?: true;
+  deniedPathsProbed?: number;
   registeredProjectReadsAllowed?: true;
   unassignedProjectWritesDenied?: true;
   protectedPathsDenied?: true;
@@ -123,6 +130,37 @@ export const CLAUDE_WORKER_SAFETY_ARGUMENTS = [
   "--permission-mode", "acceptEdits", "--permission-prompts", "none",
   "--no-session-persistence", "--verbose",
 ] as const;
+
+/**
+ * Tools a development Claude worker may use without a prompt. Restricted mode
+ * removes command tools unless named, and the contained process cannot always
+ * resolve its workspace's parent folders, so writes would otherwise need a
+ * person. The MXC sandbox, not the prompt, is the boundary for these tools.
+ */
+export const CLAUDE_FILE_TOOLS = "Read,Edit,Write,Glob,Grep";
+
+/**
+ * Arguments for a development Claude worker, kept equal to a Codex development
+ * worker: the MXC sandbox and project scope are the boundary, and the owner's
+ * workerCommandsEnabled setting (default on) decides for both providers whether
+ * the worker may run commands. --restricted is not used here: inside the sandbox
+ * it cannot resolve the workspace's parent folders and so refuses every write.
+ * No settings files, CLAUDE.md, hooks, plugins or MCP servers are loaded.
+ */
+export function claudeDevelopmentArguments(commandsEnabled: boolean, platform: NodeJS.Platform = process.platform): string[] {
+  // Git Bash (MSYS) cannot start inside the Windows MXC sandbox (0xC0000142);
+  // PowerShell can, and is what Codex workers use on Windows too.
+  const tools = commandsEnabled ? `${platform === "win32" ? "PowerShell" : "Bash"},${CLAUDE_FILE_TOOLS}` : CLAUDE_FILE_TOOLS;
+  return ["--safe-mode", "--strict-mcp-config", "--setting-sources", "",
+    "--tools", tools, "--allowedTools", tools,
+    "--permission-mode", "acceptEdits", "--permission-prompts", "none",
+    "--no-session-persistence", "--verbose"];
+}
+
+function claudeWorkerArguments(config: ClaudeAdapterConfig): readonly string[] {
+  return config.developmentMode && !config.readOnlyOnly
+    ? claudeDevelopmentArguments(config.workerCommandsEnabled !== false) : CLAUDE_WORKER_SAFETY_ARGUMENTS;
+}
 
 const claudeAdapterPath = fileURLToPath(import.meta.url);
 export type ClaudeSpawn = typeof spawn;
@@ -341,7 +379,20 @@ export function buildClaudeInvocation(config: ClaudeAdapterConfig, workspace: st
   return args;
 }
 
-function projectFilesystemPolicy(scope: ProjectScope, workspacePermissions: string, absoluteWorkspaceWrites: string[], runtimePermissions: string, processReadPaths: string[]): string {
+function projectFilesystemPolicy(scope: ProjectScope, workspacePermissions: string, absoluteWorkspaceWrites: string[], runtimePermissions: string, processReadPaths: string[],
+  development: { evidenceRoot: string | null } | null = null): string {
+  if (development) {
+    // Same shape as a Codex development worker: read baseline, then the
+    // credential/personal folders, protected evidence and protected project
+    // paths denied, then exact project, process and workspace allowances.
+    const denies = [...scope.deniedParentPaths, ...(development.evidenceRoot ? [development.evidenceRoot] : [])]
+      .map((path) => `,${JSON.stringify(path)}="deny"`).join("");
+    const reads = [...scope.readableProjectRoots, ...processReadPaths.map((path) => resolve(path))]
+      .map((path) => `,${JSON.stringify(path)}="read"`).join("");
+    const protectedDenies = scope.protectedPaths.map((path) => `,${JSON.stringify(path)}="deny"`).join("");
+    const exactWrites = absoluteWorkspaceWrites.map((path) => `,${JSON.stringify(path)}="write"`).join("");
+    return `":root"="read",":minimal"="read"${denies}${reads}${protectedDenies},":workspace_roots"={${workspacePermissions}}${exactWrites}${runtimePermissions}`;
+  }
   const traversalReads = [...new Set(scope.readableProjectRoots.map((path) => dirname(path)))]
     .map((path) => `,${JSON.stringify(path)}="read"`).join("");
   const parentDenies = scope.deniedParentPaths.map((path) => `,${JSON.stringify(path)}="deny"`).join("");
@@ -379,7 +430,10 @@ export function buildClaudeContainmentLaunch(
     .flatMap((path) => [resolve(path), dirname(resolve(path))]);
   const filesystem = projectScope
     ? projectFilesystemPolicy(projectScope, workspacePermissions, absoluteWorkspaceWrites, runtimePermissions,
-      [dirname(config.executable), ...launcherReadPaths, config.containedAppData, config.configurationDirectory, config.userInfoShim, config.pathVerifierShim])
+      [dirname(config.executable), ...launcherReadPaths, config.containedAppData, config.configurationDirectory, config.userInfoShim, config.pathVerifierShim],
+      config.developmentMode && !config.readOnlyOnly
+        ? { evidenceRoot: config.writeIsolationReceipt && isAbsolute(config.writeIsolationReceipt) ? dirname(resolve(config.writeIsolationReceipt)) : null }
+        : null)
     : `":root"="read",":workspace_roots"={${workspacePermissions}},${JSON.stringify(deniedRoot)}="${config.developmentMode ? "read" : "deny"}"${runtimePermissions}`;
   const permissionDefinition = `{description="Claude contained worker",filesystem={${filesystem}},network={enabled=true}}`;
   return {
@@ -405,10 +459,10 @@ export function buildClaudeImplementationPlan(config: ClaudeAdapterConfig, works
   if (!objective.trim()) throw new Error("objective is required");
   const cwd = assertSafeConfig(config, workspace);
   normalizeWritableWorkspacePaths(config.writableWorkspacePaths);
-  const args = ["-p", ...CLAUDE_WORKER_SAFETY_ARGUMENTS, "--output-format", config.outputFormat];
+  const args = ["-p", ...claudeWorkerArguments(config), "--output-format", config.outputFormat];
   if (config.model?.trim()) args.push("--model", config.model.trim());
   args.push(objective.trim());
-  if (args.includes("--dangerously-skip-permissions")) {
+  if (args.includes("--dangerously-skip-permissions") || args.includes("bypassPermissions")) {
     throw new Error("Claude adapter must never skip permissions");
   }
   return { executable: config.executable, args, cwd, launched: false };
@@ -526,7 +580,9 @@ function readClaudeExecutableVersion(config: ClaudeAdapterConfig): string {
 }
 
 function validatedWriteIsolationReceipt(config: ClaudeAdapterConfig, workspace: string): ClaudeWriteIsolationReceipt | undefined {
-  if (config.developmentMode) return undefined;
+  // Development workers may read the registered project, the workspace .git and
+  // its receipt (as Codex development workers do); every write stays denied.
+  const development = config.developmentMode === true;
   if (!config.writeIsolationVerified || !config.writeIsolationReceipt || !isAbsolute(config.writeIsolationReceipt)) {
     throw new Error("Claude write isolation receipt is required before dispatch");
   }
@@ -547,9 +603,10 @@ function validatedWriteIsolationReceipt(config: ClaudeAdapterConfig, workspace: 
     ["mutable boundary roots", JSON.stringify(receipt.mutableBoundaryRoots) === JSON.stringify(securityState.mutableBoundaryRoots)],
     ["host security state", receipt.hostSecurityStateFingerprint === securityState.hostSecurityStateFingerprint],
     ["writable paths", JSON.stringify(receipt.writableWorkspacePaths) === JSON.stringify(expectedPaths)],
-    ["authoritative repository probe", receipt.authoritativeRepositoryDenied === true], ["outside write probe", receipt.outsideWorkspaceWritesDenied === true],
-    ["unapproved write probe", receipt.unapprovedWorkspaceWritesDenied === true], ["git probe", receipt.gitHistoryDenied === true],
-    ["isolation receipt probe", receipt.isolationReceiptDenied === true], ["containment executable", resolve(receipt.containmentExecutable) === resolve(config.containmentExecutable)],
+    ["authoritative repository probe", receipt.authoritativeRepositoryDenied === !development], ["outside write probe", receipt.outsideWorkspaceWritesDenied === true],
+    ["unapproved write probe", receipt.unapprovedWorkspaceWritesDenied === true],
+    ["git probe", development ? receipt.gitHistoryWritesDenied === true : receipt.gitHistoryDenied === true],
+    ["isolation receipt probe", development ? receipt.isolationReceiptWritesDenied === true : receipt.isolationReceiptDenied === true], ["containment executable", resolve(receipt.containmentExecutable) === resolve(config.containmentExecutable)],
     ["containment profile", receipt.containmentProfile === config.containmentProfile], ["containment sandbox", receipt.containmentWindowsSandbox === config.containmentWindowsSandbox],
     ["contained app data", resolve(receipt.containedAppData) === resolve(config.containedAppData)], ["contained user", receipt.containedUsername === config.containedUsername],
     ["contained profile", resolve(receipt.containedUserProfile) === resolve(config.containedUserProfile)], ["user shim", resolve(receipt.userInfoShim) === resolve(config.userInfoShim)],

@@ -19,6 +19,8 @@ import { DeterministicVerifier } from "./deterministic-verifier.ts";
 import { LEGACY_DEFAULT_CODEX_MODEL, readModelCatalog } from "./model-catalog.ts";
 import { inspectCursorCli } from "./cursor-adapter.ts";
 import { inspectClaudeCli } from "./claude-adapter.ts";
+import { findClaudeExecutable } from "./portable-runtime.ts";
+import { resolveCodexExecutable } from "./codex-adapter.ts";
 import { commitVerifiedMilestone } from "./milestone-git.ts";
 import { resolveStandingMilestoneGitAuthorization } from "./milestone-git-authorization.ts";
 import { resolveWorkerWorkspaceRoot } from "./worker-workspace-root.ts";
@@ -82,6 +84,7 @@ function main(): Promise<void> {
       "worker-config": { type: "string" },
       "cursor-worker-config": { type: "string" },
       "claude-worker-config": { type: "string" },
+      "host-provider": { type: "string" },
     },
     strict: true,
   });
@@ -349,12 +352,24 @@ function main(): Promise<void> {
                 && existsSync(cursorConfig.containmentExecutable)
                 && cursorStatus.installed === true && cursorStatus.statusExitCode === 0;
               const claudeStatus = inspectClaudeCli(claudeConfig);
-              const claudeInstalled = Boolean(claudeConfig.executable)
+              const configuredClaude = Boolean(claudeConfig.executable)
                 && existsSync(claudeConfig.executable)
                 && existsSync(claudeConfig.containmentExecutable)
                 && claudeStatus.installed === true
                 && claudeConfig.authentication === "subscription-signin"
                 && claudeConfig.apiKeyAuthenticationAllowed === false;
+              // D5: a development worker needs no separate Claude (or Cursor) setup.
+              // A signed-in Claude Code install plus the Codex CLI (which provides the
+              // Windows sandbox) is enough; the driver derives the rest from the project.
+              const codexExecutable = resolveCodexExecutable();
+              const codexInstalled = !/^codex$/i.test(codexExecutable) || existsSync(String(worker.executable ?? ""));
+              const portableClaude = worker.developmentMode === true && claudeConfig.apiKeyAuthenticationAllowed !== true
+                && Boolean(findClaudeExecutable()) && codexInstalled;
+              const claudeInstalled = configuredClaude || portableClaude;
+              const hostProvider = values["host-provider"] === "claude-subscription-signin" || values["host-provider"] === "codex-chatgpt-signin"
+                ? values["host-provider"] : null;
+              const preferredProvider = worker.preferredProvider === "claude-subscription-signin" || worker.preferredProvider === "codex-chatgpt-signin"
+                ? worker.preferredProvider : null;
               let catalog;
               let catalogSource = "local Codex model catalog";
               try { catalog = readModelCatalog(); }
@@ -369,7 +384,7 @@ function main(): Promise<void> {
                 objective, pinned, suggested, avoidProviders: [...avoidProviders],
                 // Host desktop automation only for the owner's own goal objective, never a worker-proposed step.
                 desktopAutomationAllowed: objective === String(goal.objective),
-                cursorInstalled, claudeInstalled, catalog,
+                cursorInstalled, claudeInstalled, codexInstalled, hostProvider, preferredProvider, catalog,
               });
               const route = plan.primary;
               if (catalogSource !== "local Codex model catalog" && route.provider === "codex-chatgpt-signin" && !pinned && !suggested) {
@@ -394,12 +409,13 @@ function main(): Promise<void> {
                 useClaude = route.provider === "claude-subscription-signin";
                 useCursor = route.provider === "cursor-browser-login";
                 const basePath = useClaude ? claudeWorkerConfig : useCursor ? cursorWorkerConfig : workerConfig;
-                const base = JSON.parse(readFileSync(basePath, "utf8"));
+                // A missing Claude config is fine: the Claude driver derives a portable one.
+                const base = existsSync(basePath) ? JSON.parse(readFileSync(basePath, "utf8")) : {};
                 selected = { ...base, ...(useCursor ? {
                   containmentExecutable: cursorConfig.containmentExecutable,
                   assignedProjectRoot: stage.manifestValidation.sourceRoot,
                 } : {}), ...(useClaude ? {
-                  containmentExecutable: claudeConfig.containmentExecutable,
+                  ...(configuredClaude ? { containmentExecutable: claudeConfig.containmentExecutable } : {}),
                   assignedProjectRoot: stage.manifestValidation.sourceRoot,
                   authentication: "subscription-signin",
                   apiKeyAuthenticationAllowed: false,
@@ -409,6 +425,8 @@ function main(): Promise<void> {
                   developmentMode: true,
                   // Command network access is an explicit owner opt-in in the worker config.
                   commandNetworkEnabled: base.commandNetworkEnabled === true,
+                  // Shared by every provider (D5): may a worker run commands? Default on.
+                  workerCommandsEnabled: worker.workerCommandsEnabled !== false,
                   deniedSourceRoot: stage.manifestValidation.sourceRoot,
                   model: normalizeRouteModel(route.model ?? (useClaude || useCursor ? "auto" : null)),
                   reasoningEffort: route.reasoningEffort === "none" ? "low" : route.reasoningEffort };

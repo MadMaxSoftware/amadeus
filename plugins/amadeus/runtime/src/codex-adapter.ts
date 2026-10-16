@@ -37,6 +37,8 @@ export type CodexAdapterConfig = {
   maximumEstimatedCredits: number;
   developmentMode?: boolean;
   commandNetworkEnabled?: boolean;
+  /** Shared with Claude workers: may the worker run commands (default true). */
+  workerCommandsEnabled?: boolean;
   outputSchema?: string;
   isolationVerified?: boolean;
   isolationReceipt?: string | null;
@@ -303,6 +305,9 @@ export function buildCodexInvocation(
     // tools require a persistent thread and otherwise make the worker exit
     // before it can return its bounded JSON result.
     "--disable", "goals",
+    // The owner's shared workerCommandsEnabled setting (default on) applies to
+    // every provider; off leaves Codex with file edits only, like Claude.
+    ...(config.workerCommandsEnabled === false ? ["--disable", "shell_tool"] : []),
     "--ignore-user-config",
     ...(config.developmentMode ? [] : ["--ignore-rules"]),
     "--json",

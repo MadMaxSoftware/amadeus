@@ -217,7 +217,7 @@ test('Claude result parsing, progress attribution, and completion detection stay
   assert.equal(withRoute.nextRoute.provider, 'claude-subscription-signin');
 });
 
-test('Claude signed-in routing is opt-in/fallback only and preserves Codex defaults', () => {
+test('without a host or preference signal, routing keeps the Codex-first default and Claude fallbacks', () => {
   const routine = selectWorkRoute({
     objective: 'Implement the helper function',
     cursorInstalled: true,

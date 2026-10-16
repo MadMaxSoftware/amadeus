@@ -4,6 +4,25 @@ export type ModelRoute = {
   reasoningEffort?: string;
 };
 import type { ModelCatalog, ListedModel } from "./model-catalog.ts";
+
+/** The interchangeable subscription model providers (decision D5). */
+export type SubscriptionModelProvider = "codex-chatgpt-signin" | "claude-subscription-signin";
+
+/** Claude Code model aliases per capability tier; Codex tiers come from its live catalog. */
+export const CLAUDE_TIER_MODELS = { efficient: "sonnet", workhorse: "opus", frontier: "opus" } as const;
+
+/**
+ * Order the installed, non-failed providers. An owner preference wins; otherwise
+ * prefer the provider the host chat is not using, so one long goal does not use
+ * up the allowance the owner is chatting with. With no signal, Codex first.
+ */
+export function orderModelProviders(input: { available: SubscriptionModelProvider[];
+  preferredProvider?: SubscriptionModelProvider | null; hostProvider?: SubscriptionModelProvider | null }): SubscriptionModelProvider[] {
+  const rank = (provider: SubscriptionModelProvider) => provider === input.preferredProvider ? 0
+    : input.hostProvider && provider !== input.hostProvider ? 1
+    : provider === "codex-chatgpt-signin" ? 2 : 3;
+  return [...input.available].sort((a, b) => rank(a) - rank(b));
+}
 import { parseWindowsUiObjective, type WindowsUiCommand } from "./windows-ui-automation.ts";
 export type DeterministicCommand = "npm-test" | "node-test" | "npm-build" | "npm-lint" | "npm-check" | "npm-typecheck" | WindowsUiCommand;
 /** Local OpenAI-compatible route — only selected when pilot gate + qualification allow it. */
@@ -164,6 +183,12 @@ export function selectWorkRoute(input: {
    */
   localModelPilotGateOpen?: boolean;
   qualifiedLocalModels?: QualifiedLocalModelCandidate[];
+  /** A local Codex executable is available (default true: the catalog came from it). */
+  codexInstalled?: boolean;
+  /** The provider the host chat runs on; workers prefer the other one to spread usage. */
+  hostProvider?: SubscriptionModelProvider | null;
+  /** Owner preference between equal providers; overrides host spreading. */
+  preferredProvider?: SubscriptionModelProvider | null;
   /**
    * Windows UI plans act on the host desktop, outside every worker sandbox.
    * Only an objective the owner wrote may route to them; a worker-proposed
@@ -241,50 +266,68 @@ export function selectWorkRoute(input: {
     }
   }
   const ranked = input.catalog.models;
-  const select = (position: number, desiredEffort: string, reason: string,
-    capabilityTier: "efficient" | "workhorse" | "frontier", overrides: Parameters<typeof modelRoute>[2] = {}): WorkRoute => {
+  const codexAvailable = input.codexInstalled !== false && ranked.length > 0;
+  const claudeAvailable = input.claudeInstalled === true;
+  const installed = [
+    ...(codexAvailable ? ["codex-chatgpt-signin" as const] : []),
+    ...(claudeAvailable ? ["claude-subscription-signin" as const] : []),
+  ];
+  const order = orderModelProviders({ available: installed.filter((provider) => !avoided.has(provider)),
+    preferredProvider: input.preferredProvider ?? null, hostProvider: input.hostProvider ?? null });
+  const selectionSignal = input.preferredProvider && order[0] === input.preferredProvider ? "owner provider preference"
+    : input.hostProvider && order[0] && order[0] !== input.hostProvider ? "spread usage away from the host chat's provider"
+    : order.length === 1 && installed.length === 1 ? "only installed model provider" : "default provider order";
+  /** A capability tier on the first available provider (or a named one). */
+  const tierRoute = (tier: "efficient" | "workhorse" | "frontier", desiredEffort: string, reason: string,
+    overrides: Parameters<typeof modelRoute>[2] = {}, provider: SubscriptionModelProvider | undefined = order[0]): WorkRoute => {
+    if (provider === "claude-subscription-signin") {
+      return modelRoute({ provider, model: CLAUDE_TIER_MODELS[tier], reasoningEffort: desiredEffort }, reason, {
+        ...overrides, capabilityTier: tier,
+        capabilitySignals: [...(overrides.capabilitySignals ?? profile.capabilitySignals), selectionSignal] });
+    }
+    const position = tier === "frontier" ? 0 : tier === "workhorse" ? 1 : 2;
     const model: ListedModel = ranked[Math.min(position, ranked.length - 1)];
+    if (!model) throw new Error("No installed subscription model provider is available for this step");
     const effort = model.supportedEfforts.includes(desiredEffort) ? desiredEffort
       : model.supportedEfforts.includes("medium") ? "medium"
       : model.supportedEfforts[0];
     if (!effort) throw new Error(`No supported reasoning effort for ${model.slug}`);
-    return modelRoute({ provider: "codex-chatgpt-signin", model: model.slug, reasoningEffort: effort }, reason,
-      { ...overrides, capabilityTier });
+    return modelRoute({ provider: "codex-chatgpt-signin", model: model.slug, reasoningEffort: effort }, reason, {
+      ...overrides, capabilityTier: tier,
+      capabilitySignals: [...(overrides.capabilitySignals ?? profile.capabilitySignals), ...(installed.length > 1 ? [selectionSignal] : [])] });
   };
-  if (avoided.has("cursor-browser-login") && !avoided.has("codex-chatgpt-signin")) {
-    return select(2, "low", "The previous diagnosed Cursor attempt failed; switch to the efficient listed Codex model for the corrected replacement instead of repeating it.", "efficient", {
-      taskClass: "provider-fallback", capabilitySignals: ["diagnosed Cursor provider failure requires one alternate-provider replacement"], localModelCandidate: false,
-    });
+  const fallback = (signal: string) => ({ taskClass: "provider-fallback" as const, capabilitySignals: [signal], localModelCandidate: false });
+  if (avoided.has("cursor-browser-login") && order.length > 0) {
+    return tierRoute("efficient", "low", `The previous diagnosed Cursor attempt failed; switch to ${order[0] === "claude-subscription-signin" ? "Claude" : "the efficient listed Codex model"} for the corrected replacement instead of repeating it.`,
+      fallback("diagnosed Cursor provider failure requires one alternate-provider replacement"));
   }
-  if (avoided.has("codex-chatgpt-signin") && !avoided.has("cursor-browser-login") && input.cursorInstalled) {
+  const modelFailed = installed.filter((provider) => avoided.has(provider));
+  if (modelFailed.length > 0 && !avoided.has("cursor-browser-login") && input.cursorInstalled) {
     return modelRoute({ provider: "cursor-browser-login", model: "auto" },
-      "The previous diagnosed Codex attempt failed; switch provider for the corrected replacement instead of repeating it.", {
+      "The previous diagnosed model-provider attempt failed; switch provider for the corrected replacement instead of repeating it.", {
         taskClass: "provider-fallback", capabilityTier: "cursor-auto",
-        capabilitySignals: ["diagnosed Codex provider failure requires one alternate-provider replacement"], localModelCandidate: false,
+        capabilitySignals: ["diagnosed provider failure requires one alternate-provider replacement"], localModelCandidate: false,
       });
   }
-  if (avoided.has("codex-chatgpt-signin") && avoided.has("cursor-browser-login")
-    && !avoided.has("claude-subscription-signin") && input.claudeInstalled === true) {
-    return modelRoute({ provider: "claude-subscription-signin", model: "auto" },
-      "Codex and Cursor already failed in this corrected retry chain; use the separately authorized signed-in Claude route when available.", {
-        taskClass: "provider-fallback", capabilityTier: "workhorse",
-        capabilitySignals: ["diagnosed Codex and Cursor failures permit one authorized Claude replacement"], localModelCandidate: false,
-      });
+  if (modelFailed.length > 0 && order.length > 0) {
+    return tierRoute("efficient", "low", `The previous diagnosed attempt failed; use ${order[0] === "claude-subscription-signin" ? "Claude" : "Codex"} for the corrected replacement instead of repeating the same provider.`,
+      fallback("diagnosed provider failure requires one alternate-provider replacement"));
   }
-  if (avoided.has("codex-chatgpt-signin") && avoided.has("cursor-browser-login")) {
-    return select(1, "medium",
-      "Both subscription providers failed in this corrected retry chain; resume with a different, stronger listed Codex route instead of dead-ending the approved goal.",
-      "workhorse", {
-        taskClass: "provider-fallback",
-        capabilitySignals: ["all alternate subscription providers were exercised; a verified correction permits a distinct stronger Codex retry"],
-        localModelCandidate: false,
-      });
+  if (modelFailed.length > 0 && codexAvailable) {
+    return tierRoute("workhorse", "medium",
+      "Every available provider failed in this corrected retry chain; resume with a stronger listed Codex route instead of dead-ending the approved goal.",
+      fallback("all alternate subscription providers were exercised; a verified correction permits a distinct stronger retry"), "codex-chatgpt-signin");
+  }
+  if (modelFailed.length > 0) {
+    return tierRoute("workhorse", "medium",
+      "Every available provider failed in this corrected retry chain; resume with a stronger Claude route instead of dead-ending the approved goal.",
+      fallback("all alternate subscription providers were exercised; a verified correction permits a distinct stronger retry"), "claude-subscription-signin");
   }
   if (profile.taskClass === "frontier-reasoning") {
-    return select(0, "high", "Exceptional complexity is explicit: use the highest-ranked listed Codex model at routing time.", "frontier");
+    return tierRoute("frontier", "high", "Exceptional complexity is explicit: use the top capability tier of the selected provider.");
   }
   if (profile.taskClass === "complex-reasoning") {
-    return select(1, "medium", "Complex design or diagnosis is explicit: use the workhorse Codex route.", "workhorse");
+    return tierRoute("workhorse", "medium", "Complex design or diagnosis is explicit: use the workhorse tier of the selected provider.");
   }
   if (profile.taskClass === "routine-implementation" && input.cursorInstalled) {
     return modelRoute({ provider: "cursor-browser-login", model: "auto" },
@@ -292,9 +335,10 @@ export function selectWorkRoute(input: {
         capabilityTier: "cursor-auto",
       });
   }
-  return select(2, "low", profile.taskClass === "routine-implementation"
-    ? "Cursor is unavailable; use the efficient listed Codex model for the bounded implementation."
-    : "Lightweight reasoning: use the efficient listed Codex model.", "efficient");
+  const providerName = order[0] === "claude-subscription-signin" ? "Claude" : "Codex";
+  return tierRoute("efficient", "low", profile.taskClass === "routine-implementation"
+    ? `Cursor is unavailable; use the efficient ${providerName} tier for the bounded implementation.`
+    : `Lightweight reasoning: use the efficient ${providerName} tier.`);
 }
 
 /** A visible step plan: deterministic preparation and verification surround the one model/tool step that needs judgment or editing. */
