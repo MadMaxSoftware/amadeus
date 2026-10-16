@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": { "type": "string", "enum": ["continue", "complete", "needs_approval", "blocked"], "description": "Choose exactly one control state. Use continue when another bounded in-scope step remains; use blocked only when this invocation must stop." },
+    "summary": { "type": "string" },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "nextObjective": { "type": ["string", "null"] },
+    "nextStreamObjective": { "type": ["string", "null"] },
+    "remainingCriterion": { "type": ["string", "null"] },
+    "question": { "type": ["string", "null"] },
+    "caseId": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]{0,40}$" },
+    "stageRole": { "type": ["string", "null"], "enum": ["participant", "assessor", null] },
+    "recovery": {
+      "description": "MUST be null for continue, complete, and needs_approval. A non-null recovery is permitted only with status=blocked for a technical same-scope repair.",
+      "anyOf": [
+        { "type": "null" },
+        { "type": "object", "additionalProperties": false,
+          "properties": { "diagnosis": { "type": "string" }, "nextObjective": { "type": "string" }, "scope": { "type": "string", "enum": ["same-approved-scope"] } },
+          "required": ["diagnosis", "nextObjective", "scope"] }
+      ]
+    },
+    "nextRoute": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "object", "additionalProperties": false,
+          "properties": { "provider": { "type": "string", "enum": ["codex-chatgpt-signin", "cursor-browser-login"] }, "model": { "type": "string" }, "reasoningEffort": { "type": ["string", "null"] } },
+          "required": ["provider", "model", "reasoningEffort"] }
+      ]
+    }
+  },
+  "required": ["status", "summary", "evidence", "nextObjective", "nextStreamObjective", "remainingCriterion", "question", "caseId", "stageRole", "recovery", "nextRoute"]
+}

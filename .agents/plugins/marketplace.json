@@ -1,0 +1,20 @@
+{
+  "name": "amadeus",
+  "interface": {
+    "displayName": "Amadeus - Local AI Orchestrator"
+  },
+  "plugins": [
+    {
+      "name": "amadeus",
+      "source": {
+        "source": "local",
+        "path": "./plugins/amadeus"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

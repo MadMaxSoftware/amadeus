@@ -1,0 +1,15 @@
+{
+  "name": "amadeus",
+  "description": "Amadeus - Local AI Orchestrator for Claude Code",
+  "owner": {
+    "name": "Mad Max Systems"
+  },
+  "plugins": [
+    {
+      "name": "amadeus",
+      "source": "./claude-plugin",
+      "description": "Durable local orchestration using available subscription models",
+      "version": "0.3.11"
+    }
+  ]
+}

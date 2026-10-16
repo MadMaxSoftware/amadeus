@@ -1,0 +1,17 @@
+{
+  "description": "Amadeus becomes available in new chats for longer-task coordination, runs locally at startup, and does not scan the computer or send personal information.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Start Amadeus automatically"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+node_modules/
+*.sqlite
+*.sqlite-*
+.DS_Store
+.tmp/
+verification/
+_tools/
+_quarantine_host_only/
+CANDIDATE-MANIFEST.json
+# Per-machine Amadeus state and migration artifacts (never ship)
+**/migration/backups/
+**/migration/artifact-variants/
+**/.amadeus-consolidation-*/
+**/migration/journal.json
+**/migration/schema-journal.json
+plugins/amadeus/config.json
+config.local.json
+*.local.json
+
+# Owner-private leak-scan terms and local working notes (never publish)
+.private-terms.json
+.local/

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Maestro"
+  short_description: "Alias for Amadeus  -  the same Local AI Orchestrator"
+  default_prompt: "Maestro, tell me plainly what is finished, what remains, and whether you need anything from me."
+policy:
+  allow_implicit_invocation: true

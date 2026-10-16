@@ -1,0 +1,32 @@
+{
+  "name": "amadeus",
+  "version": "0.3.11",
+  "description": "Amadeus - Local AI Orchestrator. Default coordination in trusted local chats, packaged runtime, and optional consent-based capability discovery.",
+  "author": {
+    "name": "Mad Max Systems"
+  },
+  "license": "Apache-2.0",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Amadeus",
+    "shortDescription": "Local AI Orchestrator",
+    "longDescription": "Amadeus  -  Local AI Orchestrator by Mad Max Systems. Delegate durable local work using ordinary software and available subscription models. Reduce average AI usage across mixed workflows by reserving model calls for work that needs them, helping preserve subscription allowance and reduce usage-based costs. Maestro is simply an alias for Amadeus, with the same instructions, behavior, and orchestration engine. Keep going until finished or genuinely blocked.",
+    "developerName": "Mad Max Systems",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Tell me plainly what project work is finished and what remains.",
+      "Give Amadeus a task in this project and keep working until it is finished or genuinely blocked.",
+      "Show only decisions that genuinely need me."
+    ]
+  },
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/setup/SKILL.md"
+    }
+  }
+}

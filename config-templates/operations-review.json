@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "status": "paused-portable-baseline",
+  "enabled": false,
+  "goalLoop": {
+    "enabled": false,
+    "automaticContinuation": true,
+    "maximumConcurrentGoals": 4,
+    "iterationIsRetry": false,
+    "requireStructuredDecision": true,
+    "startupMode": "paused",
+    "stopOn": ["complete", "needs_approval", "blocked", "uncertain", "budget_limited", "stopped"]
+  },
+  "maxConcurrentWorkers": 4,
+  "automaticRetries": 1,
+  "heartbeatSeconds": 60,
+  "staleLeaseSeconds": 600,
+  "staleLeaseOutcome": "uncertain-requires-reconciliation-before-replacement",
+  "pauseMode": "drain",
+  "gitMilestones": {
+    "enabled": false,
+    "automaticCommit": false,
+    "automaticPush": false,
+    "trigger": "goal_complete",
+    "remote": "origin",
+    "branch": "current",
+    "requireVerifiedScope": true,
+    "standingAuthorization": {
+      "schemaVersion": 1,
+      "enabled": false,
+      "grantId": null,
+      "projectRoots": [],
+      "allowedBranches": [],
+      "allowedBranchPrefixes": [],
+      "blockedBranches": ["master", "main", "production"],
+      "remote": "origin",
+      "remoteUrl": null
+    }
+  },
+  "stopNowMode": "abort-active-and-mark-uncertain",
+  "startupAfterWindowsSignIn": false,
+  "startupModeWhenRegistered": "paused-control-plane",
+  "dispatch": {
+    "provider": "codex-chatgpt-signin",
+    "model": null,
+    "reasoningEffort": "low",
+    "permissionProfile": "amadeus_task_worker",
+    "windowsSandbox": "mxc",
+    "commandNetworkEnabled": false,
+    "approvalPolicy": "never"
+  },
+  "admissionLimits": {
+    "financialAdmissionEnforced": false,
+    "estimatedCreditsPerJob": null,
+    "estimatedCreditsPerDay": null,
+    "estimatedCreditsPerWeek": null,
+    "readOnlyTimeoutSeconds": null,
+    "boundedWriteTimeoutSeconds": null,
+    "maximumChangedFiles": null,
+    "maximumChangedLines": null
+  },
+  "accounting": {
+    "source": "codex-jsonl-turn-completed",
+    "storeReportedTokens": true,
+    "storeRateCardEstimate": true,
+    "providerActualCreditsAvailable": false,
+    "reservationIsHardCap": false
+  },
+  "failurePolicy": {
+    "processFailure": "failed",
+    "timeoutOrLostReceipt": "uncertain-requires-reconciliation",
+    "question": "waiting-question-requires-owner-answer",
+    "automaticRetry": true,
+    "backupFailureBeforeApply": "failed-no-apply",
+    "patchApplyFailure": "uncertain-requires-reconciliation"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "defaultDecision": "deny",
+  "flows": [
+    {
+      "id": "github-release-check",
+      "transport": "https",
+      "recipient": "GitHub for MadMaxSoftware/amadeus",
+      "purpose": "Check the fixed stable release source for an Amadeus update",
+      "allowedOrigins": ["https://api.github.com"],
+      "dataCategories": ["repository-identifier", "http-request-metadata"],
+      "trigger": "manual check or consented startup/24-hour check",
+      "consentKey": "updateChecks",
+      "explicitConsent": true,
+      "defaultEnabled": false,
+      "retention": "Only the last-check timestamp and normalized release result are stored locally",
+      "revocation": "Declining update consent prevents further remote checks"
+    },
+    {
+      "id": "local-openai-compatible",
+      "transport": "loopback-http",
+      "recipient": "A separately approved local provider on this computer",
+      "purpose": "Run an explicitly routed task on a qualified local model",
+      "allowedOrigins": ["loopback"],
+      "dataCategories": ["task-instructions", "approved-project-content"],
+      "trigger": "explicit provider approval plus qualified task routing",
+      "consentKey": "providerApproval",
+      "explicitConsent": true,
+      "defaultEnabled": false,
+      "retention": "Controlled by the local provider; Amadeus records only local qualification and work evidence",
+      "revocation": "Disabling or unapproving the provider immediately removes routing authority"
+    },
+    {
+      "id": "subscription-provider-execution",
+      "transport": "approved-local-application",
+      "recipient": "The explicitly selected Codex, Cursor or Claude subscription provider",
+      "purpose": "Execute an owner-authorized task in an isolated workspace",
+      "allowedOrigins": ["codex-chatgpt-signin", "cursor-browser-login", "claude-subscription-signin"],
+      "dataCategories": ["task-instructions", "isolated-project-content"],
+      "trigger": "owner-authorized task delegation and provider selection",
+      "consentKey": "taskDelegation",
+      "explicitConsent": true,
+      "defaultEnabled": false,
+      "retention": "Controlled by the selected provider; Amadeus keeps local receipts and verification evidence",
+      "revocation": "Stopping the goal or disabling the provider prevents later dispatch"
+    }
+  ]
+}

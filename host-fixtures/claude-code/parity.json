@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "host": "claude-code-cli",
+  "version": "0.3.11",
+  "status": "candidate-marketplace-host-published-worker-optional",
+  "canonicalAssets": [
+    "skills/amadeus/SKILL.md",
+    "skills/maestro/SKILL.md",
+    "skills/setup/SKILL.md",
+    "hooks/session-start.mjs",
+    "privacy-flows.json"
+  ],
+  "staticChecks": [
+    "version-match",
+    "canonical-assets-exist",
+    "manifest-parse",
+    "mcp-entrypoint-mapping",
+    "session-hook-mapping",
+    "no-provider-activation"
+  ],
+  "deterministicAdapterChecks": [
+    "install-update-rollback-disable-uninstall",
+    "signed-in-worker-separation-and-attribution",
+    "dependency-preflight-and-honest-absence-canary",
+    "routing-fallback-without-codex-behavior-change"
+  ],
+  "pilotRequired": [
+    "trusted-session-start-once-and-bypass",
+    "mcp-tool-schema-and-runtime-loading",
+    "consent-revocation-and-privacy",
+    "worker-isolation-and-patch-integrity",
+    "interruption-recovery-and-reporting",
+    "live-signed-in-host-and-e2e-canaries"
+  ]
+}

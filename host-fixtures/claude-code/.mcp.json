@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "amadeus": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/server.mjs"]
+    }
+  }
+}

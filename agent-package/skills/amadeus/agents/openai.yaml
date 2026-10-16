@@ -1,0 +1,6 @@
+interface:
+  display_name: "Amadeus"
+  short_description: "Local AI Orchestrator by Mad Max Systems"
+  default_prompt: "Use $amadeus to tell me plainly what is finished, what remains, and whether you need anything from me."
+policy:
+  allow_implicit_invocation: true

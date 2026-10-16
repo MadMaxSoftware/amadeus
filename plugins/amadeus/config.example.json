@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 3,
+  "product": "Amadeus",
+  "descriptor": "Local AI Orchestrator",
+  "publisher": "Mad Max Systems",
+  "runtimeAuthority": "packaged",
+  "developerMode": false,
+  "setupRoot": "",
+  "legacySetupRootHint": "",
+  "stateRoot": "",
+  "consents": {
+    "updateChecks": false,
+    "providerDiscovery": false
+  },
+  "localModelRouting": {
+    "releaseChannel": "stable",
+    "experimentalPilotGate": false,
+    "note": "0.4 local-model routing remains disabled on the stable channel until the friend-machine pilot passes."
+  },
+  "notes": "Copy to the per-machine Amadeus config location (see onboard.mjs). Never ship a filled machine config inside the distributable package. setupRoot/legacySetupRootHint are non-authoritative migration hints only; public installs execute the packaged plugin runtime. Provider registry and update state live under stateRoot, not in this package."
+}

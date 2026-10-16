@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "amadeus": {
+      "command": "node",
+      "args": ["./scripts/server.mjs"],
+      "cwd": ".",
+      "startup_timeout_sec": 10,
+      "tool_timeout_sec": 3600,
+      "default_tools_approval_mode": "approve",
+      "env_vars": ["LOCALAPPDATA", "USERPROFILE", "PATH", "AMADEUS_HOME", "AMADEUS_SETUP_ROOT", "AMADEUS_CONFIG", "AMADEUS_DEVELOPER_MODE"]
+    }
+  }
+}

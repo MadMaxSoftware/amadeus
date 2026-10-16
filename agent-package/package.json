@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "name": "amadeus",
+  "version": "0.3.11",
+  "host": "codex",
+  "assets": [
+    ".codex-plugin/plugin.json",
+    ".mcp.json",
+    "config.example.json",
+    "hooks/hooks.json",
+    "hooks/session-start.mjs",
+    "privacy-flows.json",
+    "skills/amadeus/SKILL.md",
+    "skills/amadeus/agents/openai.yaml",
+    "skills/maestro/SKILL.md",
+    "skills/maestro/agents/openai.yaml",
+    "skills/setup/SKILL.md"
+  ]
+}
