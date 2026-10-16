@@ -157,14 +157,16 @@ Claude Code upgrade command.
 
 ## Current release
 
-Version **0.4.0** makes unattended runs safer:
-- goals pause and ask after repeated failures or no progress;
-- goals wait out provider usage limits;
-- Codex workers can no longer read credentials or personal folders;
-- network access is opt-in;
-- the goal database is backed up daily.
+Version **0.4.1** makes Codex and Claude equal workers:
+- whichever provider is installed runs; with both, workers use the one the host
+  chat is not on, unless you set a preference;
+- Claude workers get the same sandbox as Codex and need no separate setup;
+- reports say "Integrity check only" when no project tests ran, and pytest, Go
+  and .NET runners can be enabled per project;
+- unused update-staging code is removed.
 
-Full notes: [docs/RELEASE_NOTES_0.4.0.md](docs/RELEASE_NOTES_0.4.0.md).
+Full notes: [docs/RELEASE_NOTES_0.4.1.md](docs/RELEASE_NOTES_0.4.1.md).
+Previous release: [docs/RELEASE_NOTES_0.4.0.md](docs/RELEASE_NOTES_0.4.0.md).
 
 ## License
 

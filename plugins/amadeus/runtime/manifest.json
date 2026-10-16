@@ -1,5 +1,5 @@
 {
-  "package.json": "804c8a74333a4a53c1657c51de3af01c85196c759df5fce1466060bfa128b184",
+  "package.json": "72bccb29cc4b691c18c8a4173e63b3659859b3d29cd741825d52cf6cfb09fc08",
   "src/backup-policy.ts": "93f0b100de7cd2019dff9d84170490f537351cc3460bcf7f2c16503cba248a36",
   "src/claude-adapter.ts": "0f78316467b0997a7305e26c50c7318f778d9778969a3a9a6ffd91b309fa5b27",
   "src/claude-path-verifier-shim.cjs": "70b6f5dcc7b2a3e32d40c529cc9dcae7bdb6c3cf1009eb0c715043e8e37ab771",

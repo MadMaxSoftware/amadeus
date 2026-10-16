@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "host": "claude-code-cli",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "status": "candidate-marketplace-host-published-worker-optional",
   "canonicalAssets": [
     "skills/amadeus/SKILL.md",
