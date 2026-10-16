@@ -9,7 +9,8 @@ import { formatMilestoneGitOwnerSummary } from "./completion-report.mjs";
 function providerLabel(provider) {
   return provider === "codex-chatgpt-signin" ? "Codex"
     : provider === "claude-subscription-signin" ? "Claude"
-      : provider ?? "unidentified provider";
+      : provider === "grok-subscription-signin" ? "Grok"
+        : provider ?? "unidentified provider";
 }
 
 export function goalSummary(coordinator, goalId) {
@@ -156,7 +157,7 @@ export function ownerWorkView(coordinator, goalId, includeTechnical = false) {
     percentage: percent(entry.completedSteps, stepRoutingHistory.length),
   }));
   const allocationSummary = allocationPercentages.map((entry) => {
-    const label = entry.route === "Codex" || entry.route === "Claude"
+    const label = ["Codex", "Claude", "Grok"].includes(entry.route)
       ? `${entry.route} ${entry.model ?? "default model"} (${entry.reasoningEffort ?? "default effort"})` : entry.route;
     return `${label} ${entry.percentage}%`;
   }).join(", ");

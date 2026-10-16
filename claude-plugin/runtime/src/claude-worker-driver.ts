@@ -223,7 +223,7 @@ export class ClaudeWorkerDriver implements WorkerDriver {
       if (result.exitCode !== 0 && !result.timedOut && !result.aborted && config.model
         && isUnknownClaudeModel(`${result.stdout}\n${result.stderr}`)) {
         context.progress?.({ phase: "preparing", status: "completed",
-          summary: `Claude did not accept the model "${config.model}"; using Claude Code's default model instead.` });
+          summary: `${config.cli === "grok" ? "Grok" : "Claude"} did not accept the model "${config.model}"; using its default model instead.` });
         config = { ...config, model: null };
         result = await runWith(config);
       }
@@ -253,7 +253,7 @@ export class ClaudeWorkerDriver implements WorkerDriver {
         resultArtifactPath,
         workspacePath: workspace,
         providerUsage: {
-          provider: "claude",
+          provider: config.cli === "grok" ? "grok" : "claude",
           model: config.model,
           sessionId: receipt.sessionId,
           requestId: receipt.requestId,

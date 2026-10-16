@@ -52,8 +52,8 @@ verification, recovery, and continuation needed to finish it.
 
 ## Choosing workers and models
 
-Amadeus works with whichever AI is installed (Codex, Claude) and treats them
-the same way:
+Amadeus works with whichever AI is installed (Codex, Claude, and Grok as a
+preview) and treats them the same way:
 
 - **Which provider:** the one your chat runs on, so one plan does the work. The
   other provider is a reserve: it takes over when the first one fails or
@@ -69,6 +69,11 @@ the same way:
   `"tierModels": { "claude-subscription-signin": { "frontier": "fable" } }`.
   If a provider rejects a model name, the worker falls back to that
   provider's own default model.
+- **Grok (preview):** Grok Build (`grok`) signed in with a SuperGrok or X
+  Premium+ subscription (`grok login`; API keys are never used). It has not yet
+  been run end to end, so it is off until you add
+  `"enabledProviders": ["grok-subscription-signin"]` to the worker config. Grok
+  tiers use Grok's default model unless you name them in `tierModels`.
 
 ## Verifying changes
 

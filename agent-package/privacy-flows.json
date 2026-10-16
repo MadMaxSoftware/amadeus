@@ -33,9 +33,9 @@
     {
       "id": "subscription-provider-execution",
       "transport": "approved-local-application",
-      "recipient": "The explicitly selected Codex, Cursor or Claude subscription provider",
+      "recipient": "The explicitly selected Codex, Cursor, Claude or Grok subscription provider",
       "purpose": "Execute an owner-authorized task in an isolated workspace",
-      "allowedOrigins": ["codex-chatgpt-signin", "cursor-browser-login", "claude-subscription-signin"],
+      "allowedOrigins": ["codex-chatgpt-signin", "cursor-browser-login", "claude-subscription-signin", "grok-subscription-signin"],
       "dataCategories": ["task-instructions", "isolated-project-content"],
       "trigger": "owner-authorized task delegation and provider selection",
       "consentKey": "taskDelegation",

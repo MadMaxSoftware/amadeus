@@ -1,3 +1,4 @@
+import { isSubscriptionModelProvider, type SubscriptionModelProvider } from "./worker-providers.ts";
 import { POST_DRIFT_HOUSEKEEPING_GUIDANCE } from "./post-drift-housekeeping.ts";
 
 export function withRecordedOwnerAuthorization(objective: string, events: Array<{kind?: unknown; detail?: unknown}>): string {
@@ -36,7 +37,7 @@ export type GoalDecision = {
   recovery?: { diagnosis: string; nextObjective: string; scope: "same-approved-scope" };
   /** A blocked decision that hands an already-authorized step back to the originating host. */
   hostHandoff?: { action: string };
-  nextRoute?: { provider: "codex-chatgpt-signin" | "cursor-browser-login" | "claude-subscription-signin"; model: string; reasoningEffort?: string };
+  nextRoute?: { provider: SubscriptionModelProvider | "cursor-browser-login"; model: string; reasoningEffort?: string };
   /** Parser-added audit facts; never accepted as worker-supplied fields. */
   normalizations?: string[];
 };
@@ -183,7 +184,7 @@ export function parseGoalDecision(raw: string): GoalDecision {
   let nextRoute: GoalDecision["nextRoute"];
   if (record.nextRoute !== undefined && record.nextRoute !== null) {
     const route = record.nextRoute as Record<string, unknown>;
-    if (!route || !["codex-chatgpt-signin", "cursor-browser-login", "claude-subscription-signin"].includes(String(route.provider))) {
+    if (!route || !(route.provider === "cursor-browser-login" || isSubscriptionModelProvider(route.provider))) {
       throw new Error("nextRoute must use an existing subscription provider");
     }
     nextRoute = { provider: route.provider as NonNullable<GoalDecision["nextRoute"]>["provider"], model: requiredText(route.model, "nextRoute.model"),

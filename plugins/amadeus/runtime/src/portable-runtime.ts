@@ -1,13 +1,16 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { resolveCodexExecutable } from './codex-adapter.ts';
+import { PROVIDER_SIGN_IN_FOLDERS, WORKER_PROVIDERS } from './worker-providers.ts';
 
 /** Home-folder locations a development worker never needs: credentials, tool logins, browser profiles and personal documents. */
 const SENSITIVE_HOME_PATHS = [
-  '.ssh', '.aws', '.azure', '.gnupg', '.docker', '.kube', '.config', '.codex', '.claude', '.cursor',
+  '.ssh', '.aws', '.azure', '.gnupg', '.docker', '.kube', '.config', '.cursor',
+  // Every AI provider's sign-in folder; a worker is given back only its own.
+  ...PROVIDER_SIGN_IN_FOLDERS,
   '.git-credentials', '.npmrc', '.netrc', '.pypirc',
   join('AppData', 'Roaming'), join('AppData', 'Local', 'Google'), join('AppData', 'Local', 'Microsoft', 'Edge'),
   join('AppData', 'Local', 'BraveSoftware'), join('AppData', 'Local', 'Mozilla'),
@@ -78,19 +81,53 @@ export function findClaudeExecutable(environment: NodeJS.ProcessEnv = process.en
 }
 
 /**
- * Copy the Claude executable into the Amadeus state folder. The contained
- * worker may read its executable's folder; staging keeps that grant away from
- * the user's global npm folder (which also holds other tools' files).
+ * The signed-in Grok Build executable (xAI's `grok` CLI), or null. Not verified
+ * on a live install yet: checks GROK_EXECUTABLE, the folders its installers use,
+ * then PATH. Nothing is executed to find it.
  */
-export function stageClaudeExecutable(source: string, stateRoot: string): string {
+export function findGrokExecutable(environment: NodeJS.ProcessEnv = process.env, present: (path: string) => boolean = existsSync): string | null {
+  const explicit = environment.GROK_EXECUTABLE?.trim();
+  if (explicit && isAbsolute(explicit) && present(explicit)) return resolve(explicit);
+  const names = process.platform === 'win32' ? ['grok.exe'] : ['grok'];
+  const home = environment.USERPROFILE || environment.HOME || '';
+  const folders = [
+    ...(home ? [join(home, '.grok', 'bin'), join(home, '.local', 'bin')] : []),
+    ...(environment.LOCALAPPDATA ? [join(environment.LOCALAPPDATA, 'Programs', 'grok')] : []),
+    ...String(environment.PATH ?? environment.Path ?? '').split(process.platform === 'win32' ? ';' : ':').filter(Boolean),
+  ];
+  for (const folder of folders) {
+    for (const name of names) if (present(join(folder, name))) return resolve(folder, name);
+  }
+  return null;
+}
+
+/**
+ * Grok Build is signed in to a subscription (grok login) rather than relying on
+ * an API key. GROK_HOME relocates the folder, as the CLI itself allows.
+ */
+export function grokSignedIn(environment: NodeJS.ProcessEnv = process.env, present: (path: string) => boolean = existsSync): boolean {
+  const folder = environment.GROK_HOME?.trim() || join(environment.USERPROFILE || environment.HOME || homedir(), '.grok');
+  return present(join(folder, 'auth.json'));
+}
+
+/**
+ * Copy a worker CLI executable into the Amadeus state folder. The contained
+ * worker may read its executable's folder; staging keeps that grant away from
+ * shared folders (such as the global npm folder) that hold other tools' files.
+ */
+export function stageWorkerExecutable(source: string, stateRoot: string, folder: string): string {
   const digest = createHash('sha256').update(readFileSync(source)).digest('hex');
-  const destination = join(stateRoot, 'software-runtime-homes', 'claude-code', digest.slice(0, 16), 'claude.exe');
+  const destination = join(stateRoot, 'software-runtime-homes', folder, digest.slice(0, 16), basename(source));
   if (!existsSync(destination)) {
     mkdirSync(dirname(destination), { recursive: true });
     copyFileSync(source, destination);
   }
-  if (createHash('sha256').update(readFileSync(destination)).digest('hex') !== digest) throw new Error('Staged Claude executable hash mismatch');
+  if (createHash('sha256').update(readFileSync(destination)).digest('hex') !== digest) throw new Error('Staged worker executable hash mismatch');
   return destination;
+}
+
+export function stageClaudeExecutable(source: string, stateRoot: string): string {
+  return stageWorkerExecutable(source, stateRoot, 'claude-code');
 }
 
 /**
@@ -105,12 +142,17 @@ export function portableClaudeConfig(config: Record<string, any>, sourceRoot: st
 }): Record<string, any> {
   const present = options.exists ?? existsSync;
   const codex = options.codex ?? portableWorkerConfig({}, sourceRoot, { exists: present });
+  // The same sandbox and project scope for every Claude-style CLI; only the
+  // executable, sign-in folder and output format differ (see worker-providers.ts).
+  const cli: 'claude' | 'grok' = config.cli === 'grok' ? 'grok' : 'claude';
+  const descriptor = WORKER_PROVIDERS.find((provider) => provider.cli === cli)!;
   const source = options.claudeExecutable ?? (config.executable && isAbsolute(config.executable) && present(config.executable)
-    ? config.executable : findClaudeExecutable(options.environment, present));
-  if (!source) throw new Error('A signed-in Claude Code installation is required for the Claude route.');
-  const executable = resolve(source).startsWith(resolve(options.stateRoot)) ? resolve(source) : stageClaudeExecutable(source, options.stateRoot);
+    ? config.executable : cli === 'grok' ? findGrokExecutable(options.environment, present) : findClaudeExecutable(options.environment, present));
+  if (!source) throw new Error(`A signed-in ${descriptor.label} installation is required for the ${descriptor.label} route.`);
+  const executable = resolve(source).startsWith(resolve(options.stateRoot)) ? resolve(source)
+    : stageWorkerExecutable(source, options.stateRoot, cli === 'grok' ? 'grok-build' : 'claude-code');
   const home = homedir();
-  const providerRoot = join(options.stateRoot, 'providers', 'claude');
+  const providerRoot = join(options.stateRoot, 'providers', cli);
   const containedAppData = join(providerRoot, 'appdata');
   const containedUserProfile = join(providerRoot, 'profile');
   // An always-present folder outside the project that the acceptance check
@@ -118,7 +160,8 @@ export function portableClaudeConfig(config: Record<string, any>, sourceRoot: st
   const denyProbe = join(providerRoot, 'deny-probe');
   for (const directory of [containedAppData, containedUserProfile, denyProbe]) mkdirSync(directory, { recursive: true });
   const configurationDirectory = config.configurationDirectory && isAbsolute(config.configurationDirectory)
-    ? resolve(config.configurationDirectory) : join(home, '.claude');
+    ? resolve(config.configurationDirectory)
+    : cli === 'grok' && options.environment?.GROK_HOME?.trim() ? resolve(options.environment.GROK_HOME.trim()) : join(home, descriptor.signInFolder);
   // Claude's policy starts from "deny everything" and lists exceptions, so its
   // deny list names folders outside the project. Use the same credential and
   // personal folders a Codex worker is denied, minus Claude's own sign-in folder.
@@ -140,7 +183,9 @@ export function portableClaudeConfig(config: Record<string, any>, sourceRoot: st
     userInfoShim: join(import.meta.dirname, 'claude-windows-userinfo-shim.cjs'),
     pathVerifierShim: join(import.meta.dirname, 'claude-path-verifier-shim.cjs'),
     authentication: 'subscription-signin', apiKeyAuthenticationAllowed: false, spendingRouteReviewed: true,
-    outputFormat: 'stream-json',
+    cli,
+    // Grok Build's Messages-compatible stream matches Claude Code's stream-json.
+    outputFormat: cli === 'grok' ? 'streaming-messages-json' : 'stream-json',
     configurationDirectory,
     runtimeConfigurationRoot: config.runtimeConfigurationRoot ?? join(containedAppData, 'runtime'),
     maximumRuntimeSeconds: config.maximumRuntimeSeconds ?? codex.maximumRuntimeSeconds ?? 1800,

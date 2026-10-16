@@ -5,6 +5,8 @@
  * Codex CLI (0.162); the Claude and Cursor patterns are conservative and not
  * yet confirmed against a live limit.
  */
+import { WORKER_PROVIDERS } from "./worker-providers.ts";
+
 export type UsageLimit = { matched: string; resetsAt: string | null };
 
 const USAGE_LIMIT_PATTERNS: RegExp[] = [
@@ -41,7 +43,8 @@ function parseResetTime(text: string, now: Date): string | null {
 }
 
 export function detectUsageLimit(text: string, now = new Date()): UsageLimit | null {
-  const pattern = USAGE_LIMIT_PATTERNS.find((candidate) => candidate.test(text));
+  const pattern = [...USAGE_LIMIT_PATTERNS, ...WORKER_PROVIDERS.flatMap((provider) => provider.usageLimitPatterns)]
+    .find((candidate) => candidate.test(text));
   if (!pattern) return null;
   return { matched: pattern.exec(text)![0], resetsAt: parseResetTime(text, now) };
 }

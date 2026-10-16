@@ -27,7 +27,12 @@ export type ClaudeAdapterConfig = {
   apiKeyAuthenticationAllowed: false;
   spendingRouteReviewed: boolean;
   readOnlyOnly: boolean;
-  outputFormat: "stream-json";
+  /** stream-json for Claude Code; Grok Build's Messages-compatible equivalent for Grok. */
+  outputFormat: "stream-json" | "streaming-messages-json";
+  /** Which Claude-style CLI this config runs (default Claude Code). */
+  cli?: "claude" | "grok";
+  /** Capability-tier effort, passed to CLIs that accept one (Grok Build). */
+  reasoningEffort?: string;
   model: string | null;
   deniedSourceRoot: string;
   assignedProjectRoot?: string;
@@ -157,6 +162,29 @@ export function claudeDevelopmentArguments(commandsEnabled: boolean, platform: N
     "--no-session-persistence", "--verbose"];
 }
 
+/** Grok Build tool ids for its built-in web access and subagents, which workers never use. */
+const GROK_DENIED_TOOLS = ["web_search", "web_fetch", "Agent"];
+
+/**
+ * Arguments for a development Grok Build worker, equal in effect to a Claude or
+ * Codex development worker: the MXC sandbox and project scope are the boundary;
+ * file tools are approved without a prompt; commands follow the shared
+ * workerCommandsEnabled setting; web access and subagents are removed; no
+ * background update checks. Built from xAI's published headless-mode flags and
+ * not yet run on a signed-in machine (the provider is opt-in until it is).
+ */
+export function grokDevelopmentArguments(commandsEnabled: boolean, options: { model?: string | null; reasoningEffort?: string | null } = {}): string[] {
+  const denied = commandsEnabled ? GROK_DENIED_TOOLS : [...GROK_DENIED_TOOLS, "run_terminal_cmd"];
+  return [
+    "--output-format", "streaming-messages-json", "--no-auto-update",
+    "--disallowed-tools", denied.join(","),
+    "--allow", "Read", "--allow", "Grep", "--allow", "Edit", "--allow", "Write",
+    ...(commandsEnabled ? ["--allow", "Bash"] : []),
+    ...(options.model?.trim() ? ["--model", options.model.trim()] : []),
+    ...(options.reasoningEffort?.trim() && options.reasoningEffort !== "none" ? ["--effort", options.reasoningEffort.trim()] : []),
+  ];
+}
+
 function claudeWorkerArguments(config: ClaudeAdapterConfig): readonly string[] {
   return config.developmentMode && !config.readOnlyOnly
     ? claudeDevelopmentArguments(config.workerCommandsEnabled !== false) : CLAUDE_WORKER_SAFETY_ARGUMENTS;
@@ -265,7 +293,8 @@ function assertSafeConfig(config: ClaudeAdapterConfig, workspace: string): strin
   if (config.authentication !== "subscription-signin" || config.apiKeyAuthenticationAllowed !== false) {
     throw new Error("Claude adapter permits subscription sign-in only; API-key billing is prohibited");
   }
-  if (config.outputFormat !== "stream-json") throw new Error("Claude adapter requires stream-json receipts");
+  const expectedFormat = config.cli === "grok" ? "streaming-messages-json" : "stream-json";
+  if (config.outputFormat !== expectedFormat) throw new Error(`${config.cli === "grok" ? "Grok" : "Claude"} adapter requires ${expectedFormat} receipts`);
   if (!Number.isSafeInteger(config.maximumRuntimeSeconds) || config.maximumRuntimeSeconds < 0
     || config.maximumIdleSeconds !== undefined && (!Number.isSafeInteger(config.maximumIdleSeconds) || config.maximumIdleSeconds < 0)) {
     throw new Error("Invalid Claude timeout");
@@ -349,6 +378,8 @@ export function buildClaudeEnvironment(
     // only for temp/cache output below; redirecting CLAUDE_CONFIG_DIR there
     // makes an already signed-in Claude installation appear logged out.
     CLAUDE_CONFIG_DIR: resolve(config.configurationDirectory),
+    // Grok Build keeps its sign-in in GROK_HOME (default ~/.grok); HOME is redirected below.
+    ...(config.cli === "grok" ? { GROK_HOME: resolve(config.configurationDirectory) } : {}),
     CLAUDE_CONTAINED_USERNAME: config.containedUsername,
     CLAUDE_CONTAINED_HOME: containedProfile,
     CLAUDE_CONTAINED_WORKSPACE: workspace ? resolve(workspace) : "",
@@ -459,6 +490,12 @@ export function buildClaudeImplementationPlan(config: ClaudeAdapterConfig, works
   if (!objective.trim()) throw new Error("objective is required");
   const cwd = assertSafeConfig(config, workspace);
   normalizeWritableWorkspacePaths(config.writableWorkspacePaths);
+  if (config.cli === "grok") {
+    if (!config.developmentMode || config.readOnlyOnly) throw new Error("Grok workers run only as development workers");
+    const args = [...grokDevelopmentArguments(config.workerCommandsEnabled !== false, config), "-p", objective.trim()];
+    if (args.some((value) => /^--yolo$|bypassPermissions/.test(value))) throw new Error("Grok adapter must never auto-approve every tool");
+    return { executable: config.executable, args, cwd, launched: false };
+  }
   const args = ["-p", ...claudeWorkerArguments(config), "--output-format", config.outputFormat];
   if (config.model?.trim()) args.push("--model", config.model.trim());
   args.push(objective.trim());

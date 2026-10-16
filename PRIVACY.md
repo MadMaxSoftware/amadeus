@@ -29,7 +29,8 @@ The declarations are limited to:
 
 1. consented GitHub release checks for `MadMaxSoftware/amadeus`;
 2. separately approved loopback-only local-model communication; and
-3. explicitly selected Codex, Cursor or Claude subscription-provider execution.
+3. explicitly selected Codex, Cursor, Claude or Grok subscription-provider execution
+   (Grok only after the owner adds it to `enabledProviders`).
 
 The coordinator checks every subscription-provider dispatch against this
 declaration and refuses a provider that is not listed.

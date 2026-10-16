@@ -19,7 +19,8 @@ import { DeterministicVerifier } from "./deterministic-verifier.ts";
 import { LEGACY_DEFAULT_CODEX_MODEL, readModelCatalog } from "./model-catalog.ts";
 import { inspectCursorCli } from "./cursor-adapter.ts";
 import { inspectClaudeCli } from "./claude-adapter.ts";
-import { findClaudeExecutable } from "./portable-runtime.ts";
+import { findClaudeExecutable, findGrokExecutable, grokSignedIn } from "./portable-runtime.ts";
+import { isSubscriptionModelProvider, providerAllowed, workerProvider, type SubscriptionModelProvider } from "./worker-providers.ts";
 import { resolveCodexExecutable } from "./codex-adapter.ts";
 import { commitVerifiedMilestone } from "./milestone-git.ts";
 import { resolveStandingMilestoneGitAuthorization } from "./milestone-git-authorization.ts";
@@ -107,6 +108,8 @@ function main(): Promise<void> {
   const artifactRoot = join(stateRoot, "patches");
   let useCursor = operations.dispatch.provider === "cursor-browser-login";
   let useClaude = operations.dispatch.provider === "claude-subscription-signin";
+  // Which Claude-style CLI the shared driver runs (Claude Code or Grok Build).
+  let claudeStyleProvider: SubscriptionModelProvider = "claude-subscription-signin";
   const selectedWorkerConfig = useClaude ? claudeWorkerConfig : useCursor ? cursorWorkerConfig : workerConfig;
   let selectedRoute: WorkRoute | null = null;
   let softwareCompletesGoal = false;
@@ -141,7 +144,7 @@ function main(): Promise<void> {
       ?? JSON.parse(readFileSync(manifest, "utf8")).source.projectRoot));
     const workspaceRoot = resolveWorkerWorkspaceRoot(projectRoot, stateRoot);
     if (selectedRoute?.provider !== "software") {
-      assertSubscriptionProviderDeclared(useClaude ? "claude-subscription-signin" : useCursor ? "cursor-browser-login" : "codex-chatgpt-signin",
+      assertSubscriptionProviderDeclared(useClaude ? claudeStyleProvider : useCursor ? "cursor-browser-login" : "codex-chatgpt-signin",
         privacyFlowsPath(coordinatorRoot));
     }
     const worker = selectedRoute?.provider === "software"
@@ -318,7 +321,7 @@ function main(): Promise<void> {
               const latest = coordinator.goalEvents(goalId).filter((event) => event.kind === "iteration_completed").at(-1);
               const suggested = latest ? JSON.parse(String(latest.detail)).decision?.nextRoute : null;
               const objective = String(job.iteration_objective || goal.next_objective || goal.objective);
-              const avoidProviders = new Set<"codex-chatgpt-signin" | "cursor-browser-login" | "claude-subscription-signin">();
+              const avoidProviders = new Set<SubscriptionModelProvider | "cursor-browser-login">();
               const retryEvents = coordinator.goalEvents(goalId).filter((event) => event.kind === "retry_authorized");
               const retryHistory: Array<{ jobStatus: string; retryAuthorized: boolean; provider: unknown; failureDetail: unknown }> = [];
               for (let iteration = Number(job.goal_iteration) - 1; iteration > 0; iteration--) {
@@ -366,15 +369,20 @@ function main(): Promise<void> {
               const portableClaude = worker.developmentMode === true && claudeConfig.apiKeyAuthenticationAllowed !== true
                 && Boolean(findClaudeExecutable()) && codexInstalled;
               const claudeInstalled = configuredClaude || portableClaude;
-              const hostProvider = values["host-provider"] === "claude-subscription-signin" || values["host-provider"] === "codex-chatgpt-signin"
-                ? values["host-provider"] : null;
-              const preferredProvider = worker.preferredProvider === "claude-subscription-signin" || worker.preferredProvider === "codex-chatgpt-signin"
-                ? worker.preferredProvider : null;
+              // Grok Build is not yet verified live, so it also needs the owner's opt-in
+              // ("enabledProviders": ["grok-subscription-signin"]) and a subscription sign-in.
+              const grokInstalled = worker.developmentMode === true && codexInstalled
+                && providerAllowed("grok-subscription-signin", worker.enabledProviders)
+                && Boolean(findGrokExecutable()) && grokSignedIn();
+              const hostProvider = isSubscriptionModelProvider(values["host-provider"]) ? values["host-provider"] : null;
+              const preferredProvider = isSubscriptionModelProvider(worker.preferredProvider) ? worker.preferredProvider : null;
               // A provider at its usage limit (on any goal) is skipped until its reset time.
-              const limitedProviders = coordinator.providersAtUsageLimit()
-                .filter((provider): provider is "codex-chatgpt-signin" | "claude-subscription-signin" =>
-                  provider === "codex-chatgpt-signin" || provider === "claude-subscription-signin");
-              const installedProviders = [...(codexInstalled ? ["codex-chatgpt-signin"] : []), ...(claudeInstalled ? ["claude-subscription-signin"] : [])];
+              const limitedProviders = coordinator.providersAtUsageLimit().filter(isSubscriptionModelProvider);
+              const installedProviders: SubscriptionModelProvider[] = [
+                ...(codexInstalled ? ["codex-chatgpt-signin" as const] : []),
+                ...(claudeInstalled ? ["claude-subscription-signin" as const] : []),
+                ...(grokInstalled ? ["grok-subscription-signin" as const] : []),
+              ];
               // One owner setting for every provider: { "<provider>": { "efficient": "...", ... } }.
               const tierModels = worker.tierModels && typeof worker.tierModels === "object" ? worker.tierModels : null;
               let catalog;
@@ -391,7 +399,7 @@ function main(): Promise<void> {
                 objective, pinned, suggested, avoidProviders: [...avoidProviders],
                 // Host desktop automation only for the owner's own goal objective, never a worker-proposed step.
                 desktopAutomationAllowed: objective === String(goal.objective),
-                cursorInstalled, claudeInstalled, codexInstalled, hostProvider, preferredProvider, limitedProviders, tierModels, catalog,
+                cursorInstalled, claudeInstalled, codexInstalled, installedProviders, hostProvider, preferredProvider, limitedProviders, tierModels, catalog,
               });
               const route = plan.primary;
               if (catalogSource !== "local Codex model catalog" && route.provider === "codex-chatgpt-signin" && !pinned && !suggested) {
@@ -413,16 +421,20 @@ function main(): Promise<void> {
                 evidence: [stage.manifestPath],
               }));
               {
-                useClaude = route.provider === "claude-subscription-signin";
+                const routedProvider = workerProvider(route.provider);
+                useClaude = routedProvider?.driver === "claude-style";
+                if (useClaude) claudeStyleProvider = routedProvider!.id;
+                const routedCli = routedProvider?.cli ?? "claude";
                 useCursor = route.provider === "cursor-browser-login";
-                const basePath = useClaude ? claudeWorkerConfig : useCursor ? cursorWorkerConfig : workerConfig;
-                // A missing Claude config is fine: the Claude driver derives a portable one.
-                const base = existsSync(basePath) ? JSON.parse(readFileSync(basePath, "utf8")) : {};
+                const basePath = useClaude ? (routedCli === "claude" ? claudeWorkerConfig : null) : useCursor ? cursorWorkerConfig : workerConfig;
+                // A missing Claude-style config is fine: the driver derives a portable one.
+                const base = basePath && existsSync(basePath) ? JSON.parse(readFileSync(basePath, "utf8")) : {};
                 selected = { ...base, ...(useCursor ? {
                   containmentExecutable: cursorConfig.containmentExecutable,
                   assignedProjectRoot: stage.manifestValidation.sourceRoot,
                 } : {}), ...(useClaude ? {
-                  ...(configuredClaude ? { containmentExecutable: claudeConfig.containmentExecutable } : {}),
+                  cli: routedCli,
+                  ...(configuredClaude && routedCli === "claude" ? { containmentExecutable: claudeConfig.containmentExecutable } : {}),
                   assignedProjectRoot: stage.manifestValidation.sourceRoot,
                   authentication: "subscription-signin",
                   apiKeyAuthenticationAllowed: false,
