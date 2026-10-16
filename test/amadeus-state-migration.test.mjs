@@ -223,6 +223,21 @@ test("marketplace identity / version cache change still resolves shared syntheti
   rmSync(f.dir, { recursive: true, force: true });
 });
 
+test("duplicate roots identify the first candidate they alias", () => {
+  const f = synthFixture("alias");
+  const discovery = discoverKnownStateRoots({
+    env: { ...process.env, AMADEUS_HOME: f.source, LOCALAPPDATA: f.dir },
+    config: { stateRoot: f.source, setupRoot: f.dir },
+    setupRoot: f.dir,
+  });
+  const canonical = discovery.roots.find((root) => root.id === "canonical-amadeus");
+  const configured = discovery.roots.find((root) => root.id === "machine-config-stateRoot");
+  assert.equal(canonical.alias, false);
+  assert.equal(configured.alias, true);
+  assert.equal(configured.duplicateOf, "canonical-amadeus");
+  rmSync(f.dir, { recursive: true, force: true });
+});
+
 test("multiple coordinator histories fail closed instead of selecting a winner", () => {
   const f = synthFixture("multi-root");
   const setupRoot = join(f.dir, "setup");

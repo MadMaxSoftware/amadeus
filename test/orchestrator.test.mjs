@@ -44,6 +44,18 @@ test('a goal iteration with a decision is checkpointed and applied once', async 
   assert.deepEqual(calls, { checkpoint: 1, apply: 1 });
 });
 
+test('line ending churn rejection preserves the worker result artifact', async (t) => {
+  const { coordinator, goalId, calls, checkpoint, applicator } = setup(t);
+  const resultArtifactPath = 'result-artifact.json';
+  const worker = { async run() { return { outcome: 'changed files', providerUsage, resultArtifactPath,
+    patch: { ...patch, changedLines: 202, semanticChangedLines: 2, lineEndingOnlyLines: 200 },
+    goalDecision: continueDecision }; } };
+  const job = await new Orchestrator(coordinator, worker, checkpoint, applicator).runOnce(goalId);
+  assert.equal(job.status, 'failed');
+  assert.equal(job.result_artifact_path, resultArtifactPath);
+  assert.deepEqual(calls, { checkpoint: 0, apply: 0 });
+});
+
 function waitForAbortOrTimeout(signal, ms) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(false), ms);

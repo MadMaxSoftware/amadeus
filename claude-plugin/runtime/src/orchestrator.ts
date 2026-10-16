@@ -293,7 +293,7 @@ export class Orchestrator {
           && (result.patch.lineEndingOnlyLines ?? 0) > (result.patch.semanticChangedLines ?? result.patch.changedLines)) {
           const detail = `Patch rejected before checkpoint or apply: ${result.patch.lineEndingOnlyLines} line-ending-only changes exceed ${result.patch.semanticChangedLines ?? "unknown"} substantive changed lines.`;
           this.coordinator.recordAuditNote(jobId, "line_ending_churn_rejected", detail);
-          this.coordinator.finish(jobId, "failed", detail);
+          this.coordinator.finish(jobId, "failed", detail, result.resultArtifactPath);
           return this.coordinator.getJob(jobId);
         }
         if (result.patch.changedFiles > (this.options.maximumChangedFiles ?? Infinity)

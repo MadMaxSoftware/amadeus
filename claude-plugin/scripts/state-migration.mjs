@@ -26,9 +26,7 @@ import { databaseFingerprint, snapshotDatabase } from "./state-consolidation.mjs
 import {
   assertNoPersonalLeak,
   defaultMachineConfigPath,
-  lifecycleStatePaths,
   loadMachineConfig,
-  migrateMachineConfig,
   resolveStateRoot,
   writeMachineConfig,
 } from "./amadeus-runtime.mjs";
@@ -166,7 +164,7 @@ export function discoverKnownStateRoots(options = {}) {
     { id: "setup-sibling", path: setupSibling, kind: "setup-sibling" },
   ];
 
-  const seen = new Set();
+  const seen = new Map();
   const roots = [];
   for (const candidate of candidates) {
     if (!candidate.path) continue;
@@ -175,13 +173,13 @@ export function discoverKnownStateRoots(options = {}) {
       roots.push({
         ...candidate,
         path: resolve(candidate.path),
-        duplicateOf: [...seen].find((k) => k === key) ? candidate.id : undefined,
+        duplicateOf: seen.get(key),
         inventory: inventoryStateRoot(candidate.path, { fingerprint: false }),
         alias: true,
       });
       continue;
     }
-    seen.add(key);
+    seen.set(key, candidate.id);
     const inventory = inventoryStateRoot(candidate.path, { fingerprint: false });
     roots.push({
       ...candidate,
@@ -600,7 +598,6 @@ export function runStateMigrationWorkflow(options = {}) {
   }
   const sourceRoot = resolve(String(
     options.sourceRoot
-    ?? discovery.roots.find((r) => r.kind === "legacy-default" && r.inventory.hasCoordinatorDb)?.path
     ?? discovery.roots.find((r) => r.inventory.hasCoordinatorDb)?.path
     ?? discovery.resolvedStateRoot,
   ));
@@ -666,6 +663,3 @@ export function publicSafeDiscoveryReport(discovery) {
   assertNoPersonalLeak(JSON.stringify(report), "state-migration-report");
   return report;
 }
-
-void migrateMachineConfig;
-void lifecycleStatePaths;
