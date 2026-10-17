@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,6 +9,8 @@ import { terminateWorkerTree } from "./worker-process.ts";
 import { WORKER_RUNTIME_DIRECTORY, workerRuntimeLayout } from "./worker-runtime-layout.ts";
 import { isolationSecurityStateBinding } from "./isolation-security-state.ts";
 import { withoutCredentials } from "./worker-environment.ts";
+import { assertNoWorkspaceReparsePoints, containedLaunch, denyByDefaultFilesystemPolicy, normalizeProjectScope as normalizeSharedProjectScope, normalizeWritableWorkspacePaths as normalizeSharedWritablePaths, workspacePermissionEntries, writableParentChain as sharedWritableParentChain } from "./worker-sandbox.ts";
+import { containedEnvelopeCore, containedSecurityBoundaryPaths, containedWriteReceiptChecks } from "./worker-receipts.ts";
 
 export type CursorAdapterConfig = {
   schemaVersion: 1;
@@ -129,38 +131,6 @@ function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex").toUpperCase();
 }
 
-function stableWorkspaceChildren(path: string, writablePaths: string[]): string[] {
-  if (!existsSync(path)) return [];
-  const mutableTopLevels = new Set(writablePaths.filter((value) => value !== ".").map((value) => value.split("/")[0].toLowerCase()));
-  const allWorkspaceChildrenMutable = writablePaths.includes(".");
-  return readdirSync(path)
-    .filter((name) => [".git", ".worker-isolation.json", WORKER_RUNTIME_DIRECTORY].includes(name.toLowerCase())
-      || !allWorkspaceChildrenMutable && !mutableTopLevels.has(name.toLowerCase()))
-    .map((name) => join(path, name));
-}
-
-function writableParentChain(workspace: string, writablePaths: string[]): string[] {
-  const root = resolve(workspace);
-  const parents = new Set<string>([root]);
-  for (const relativePath of writablePaths) {
-    const target = relativePath === "." ? root : resolve(root, relativePath);
-    let parent = existsSync(target) && statSync(target).isDirectory() ? target : dirname(target);
-    if (!existsSync(parent) || !statSync(parent).isDirectory()) {
-      throw new Error(`Cursor writable path parent must be materialized before isolation acceptance: ${relativePath}`);
-    }
-    while (true) {
-      const relativeParent = parent.toLowerCase() === root.toLowerCase() ? "" : relative(root, parent);
-      if (parent.toLowerCase() !== root.toLowerCase() && (relativeParent.startsWith(`..${sep}`) || relativeParent === ".." || isAbsolute(relativeParent))) {
-        throw new Error(`Cursor writable path parent escapes the worker workspace: ${relativePath}`);
-      }
-      parents.add(parent);
-      if (parent.toLowerCase() === root.toLowerCase()) break;
-      parent = dirname(parent);
-    }
-  }
-  return [...parents];
-}
-
 export type CursorResultReceipt = {
   result: string;
   sessionId: string;
@@ -199,87 +169,6 @@ export function setCursorSpawnForTests(value: CursorSpawn): () => void {
 function saveCursorEvidence(evidence: { stdout: string; stderr: string; captureWorkspace?: boolean }, sink?: (evidence: { stdout: string; stderr: string; captureWorkspace?: boolean }) => void): string | undefined {
   try { sink?.(evidence); return undefined; }
   catch (error) { return error instanceof Error ? error.message : String(error); }
-}
-
-function normalizeWritableWorkspacePaths(paths: string[] | undefined): string[] {
-  if (!Array.isArray(paths)) {
-    throw new Error("Cursor writableWorkspacePaths must be an array");
-  }
-  const normalized = paths.map((value) => {
-    if (value === ".") return value;
-    if (typeof value !== "string" || !value || value.includes("\\") || value.startsWith("/") || /^[A-Za-z]:/.test(value)) {
-      throw new Error("Cursor writable paths must be relative forward-slash paths");
-    }
-    const parts = value.split("/");
-    if (parts.some((part) => !part || part === "." || part === "..") || parts[0].toLowerCase() === ".git"
-      || parts[0].toLowerCase() === WORKER_RUNTIME_DIRECTORY || value === ".worker-isolation.json") {
-      throw new Error("Unsafe Cursor writable path");
-    }
-    return value;
-  });
-  if (new Set(normalized.map((value) => value.toLowerCase())).size !== normalized.length) {
-    throw new Error("Duplicate Cursor writable path");
-  }
-  return normalized;
-}
-
-type ProjectScope = { assignedProjectRoot: string; readableProjectRoots: string[]; deniedParentPaths: string[]; protectedPaths: string[] };
-
-function isWithin(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value === "" || value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value);
-}
-
-function normalizeProjectScope(config: CursorAdapterConfig): ProjectScope | null {
-  const configured = config.assignedProjectRoot !== undefined || config.readableProjectRoots !== undefined || config.deniedParentPaths !== undefined || config.protectedPaths !== undefined;
-  if (!configured) return null;
-  if (!config.assignedProjectRoot || !Array.isArray(config.readableProjectRoots) || !Array.isArray(config.deniedParentPaths) || !Array.isArray(config.protectedPaths)) {
-    throw new Error("Cursor project scope requires assignedProjectRoot, readableProjectRoots, deniedParentPaths, and protectedPaths");
-  }
-  const readableProjectRoots = config.readableProjectRoots.map((path) => {
-    if (!isAbsolute(path)) throw new Error("Cursor readable project roots must be absolute");
-    const resolved = resolve(path);
-    if (!existsSync(resolved) || !statSync(resolved).isDirectory()) throw new Error(`Cursor readable project root is missing: ${resolved}`);
-    return resolved;
-  });
-  if (readableProjectRoots.length === 0 || new Set(readableProjectRoots.map((path) => path.toLowerCase())).size !== readableProjectRoots.length) {
-    throw new Error("Cursor readable project roots must be nonempty and unique");
-  }
-  const assignedProjectRoot = resolve(config.assignedProjectRoot);
-  if (!readableProjectRoots.some((path) => isWithin(path, assignedProjectRoot))) {
-    throw new Error("Cursor assigned project must be inside a readable account root");
-  }
-  const deniedParentPaths = config.deniedParentPaths.map((path) => {
-    if (!isAbsolute(path)) throw new Error("Cursor denied parent paths must be absolute");
-    return resolve(path);
-  });
-  if (deniedParentPaths.length === 0 || new Set(deniedParentPaths.map((path) => path.toLowerCase())).size !== deniedParentPaths.length
-    || deniedParentPaths.some((denied) => readableProjectRoots.some((root) => isWithin(denied, root)))) {
-    throw new Error("Cursor denied user paths must be unique and must not contain readable account roots");
-  }
-  const protectedPaths = config.protectedPaths.map((path) => {
-    if (!isAbsolute(path)) throw new Error("Cursor protected paths must be absolute");
-    const resolved = resolve(path);
-    if (!readableProjectRoots.some((root) => isWithin(root, resolved)) || readableProjectRoots.some((root) => root.toLowerCase() === resolved.toLowerCase())) {
-      throw new Error("Cursor protected paths must be strict children of registered project roots");
-    }
-    return resolved;
-  });
-  if (new Set(protectedPaths.map((path) => path.toLowerCase())).size !== protectedPaths.length) {
-    throw new Error("Cursor protected paths must be unique");
-  }
-  return { assignedProjectRoot, readableProjectRoots, deniedParentPaths, protectedPaths };
-}
-
-function projectFilesystemPolicy(scope: ProjectScope, workspacePermissions: string, absoluteWorkspaceWrites: string[], runtimePermissions: string, processReadPaths: string[]): string {
-  const traversalReads = [...new Set(scope.readableProjectRoots.map((path) => dirname(path)))]
-    .map((path) => `,${JSON.stringify(path)}="read"`).join("");
-  const parentDenies = scope.deniedParentPaths.map((path) => `,${JSON.stringify(path)}="deny"`).join("");
-  const reads = scope.readableProjectRoots.map((path) => `,${JSON.stringify(path)}="read"`).join("");
-  const denies = scope.protectedPaths.map((path) => `,${JSON.stringify(path)}="deny"`).join("");
-  const processReads = processReadPaths.map((path) => `,${JSON.stringify(resolve(path))}="read"`).join("");
-  const exactWrites = absoluteWorkspaceWrites.map((path) => `,${JSON.stringify(path)}="write"`).join("");
-  return `":root"="deny",":minimal"="read"${traversalReads}${parentDenies}${reads}${denies}${processReads},":workspace_roots"={${workspacePermissions}}${exactWrites}${runtimePermissions}`;
 }
 
 function assertSafeConfig(config: CursorAdapterConfig, workspace: string): string {
@@ -325,21 +214,8 @@ function assertSafeConfig(config: CursorAdapterConfig, workspace: string): strin
     throw new Error("Cursor workspace must not be inside the authoritative repository");
   }
   verifyWorkspace(resolvedWorkspace);
-  assertNoWorkspaceReparsePoints(resolvedWorkspace);
+  assertNoWorkspaceReparsePoints(resolvedWorkspace, "Cursor");
   return resolvedWorkspace;
-}
-
-function assertNoWorkspaceReparsePoints(workspace: string): void {
-  const pending = [workspace];
-  while (pending.length > 0) {
-    const current = pending.pop()!;
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const path = join(current, entry.name);
-      const info = lstatSync(path);
-      if (info.isSymbolicLink()) throw new Error(`Cursor workspace contains a prohibited reparse point: ${path}`);
-      if (info.isDirectory()) pending.push(path);
-    }
-  }
 }
 
 export function buildCursorInvocation(config: CursorAdapterConfig, workspace: string, objective: string): string[] {
@@ -384,48 +260,31 @@ export function buildCursorEnvironment(config: CursorAdapterConfig, configuratio
 export function buildCursorContainmentLaunch(
   config: CursorAdapterConfig,
   workspace: string,
-  cursorArgs: string[],
+  workerArgs: string[],
   writableWorkspacePaths: string[] = [],
   runtimeWritableDirectory?: string,
 ): { executable: string; args: string[]; cwd: string } {
   const cwd = assertSafeConfig(config, workspace);
-  const writablePaths = writableWorkspacePaths.length > 0
-    ? normalizeWritableWorkspacePaths(writableWorkspacePaths)
-    : [];
+  const writablePaths = writableWorkspacePaths.length > 0 ? normalizeSharedWritablePaths(writableWorkspacePaths, { label: "Cursor", required: true }) : [];
   const deniedRoot = resolve(config.deniedSourceRoot);
   const runtimeWrite = runtimeWritableDirectory ? resolve(runtimeWritableDirectory) : null;
   const runtimePermissions = workerRuntimeLayout(config.runtimeConfigurationRoot, runtimeWrite ?? undefined);
-  const workspacePermissions = [
-    `"."="${writablePaths.includes(".") ? "write" : "read"}"`,
-    ...writablePaths.filter((path) => path !== ".").map((path) => `${JSON.stringify(path)}="write"`),
-    // Cursor itself needs repository metadata to establish project context.
-    // The CLI allowlist below still denies model-tool reads and the OS layer
-    // keeps both paths read-only, which the host acceptance verifies.
-    `".git"="read"`,
-    `".worker-isolation.json"="read"`,
-  ].join(",");
-  const projectScope = normalizeProjectScope(config);
+  // Cursor itself needs repository metadata to establish project context.
+  // The CLI allowlist still denies model-tool reads and the OS layer keeps both
+  // paths read-only, which the host acceptance verifies.
+  const workspacePermissions = workspacePermissionEntries(writablePaths, "read");
+  const projectScope = normalizeSharedProjectScope(config, { label: "Cursor", deniedPaths: "outside-projects" });
   const absoluteWorkspaceWrites = [...new Set(writablePaths.map((path) => resolve(cwd, path)))];
   const launcherReadPaths = (config.executableArguments ?? [])
     .filter((value) => isAbsolute(value) && existsSync(value))
     .flatMap((path) => [resolve(path), dirname(resolve(path))]);
   const filesystem = projectScope
-    ? projectFilesystemPolicy(projectScope, workspacePermissions, absoluteWorkspaceWrites, runtimePermissions,
-      [dirname(config.executable), ...launcherReadPaths, config.authenticationFile, config.userInfoShim, config.pathVerifierShim])
+    ? denyByDefaultFilesystemPolicy({ scope: projectScope, workspacePermissions, absoluteWorkspaceWrites, runtimePermissions,
+      processReadPaths: [dirname(config.executable), ...launcherReadPaths, config.authenticationFile, config.userInfoShim, config.pathVerifierShim] })
     : `":root"="read",":workspace_roots"={${workspacePermissions}},${JSON.stringify(deniedRoot)}="${config.developmentMode ? "read" : "deny"}"${runtimePermissions}`;
-  const permissionDefinition = `{description="Cursor contained worker",filesystem={${filesystem}},network={enabled=true}}`;
-  return {
-    executable: config.containmentExecutable,
-    args: [
-      "sandbox", "-C", cwd,
-      "-c", `windows.sandbox=${JSON.stringify(config.containmentWindowsSandbox)}`,
-      "-c", `permissions.${config.containmentProfile}=${permissionDefinition}`,
-      "-c", `default_permissions=${JSON.stringify(config.containmentProfile)}`,
-      "-P", config.containmentProfile,
-      "--", config.executable, ...(config.executableArguments ?? []), ...cursorArgs,
-    ],
-    cwd,
-  };
+  return containedLaunch({ containmentExecutable: config.containmentExecutable, sandbox: config.containmentWindowsSandbox,
+    profile: config.containmentProfile, description: "Cursor contained worker", filesystem, networkEnabled: true,
+    cwd, executable: config.executable, executableArguments: config.executableArguments, args: workerArgs });
 }
 
 export function buildCursorImplementationPlan(config: CursorAdapterConfig, workspace: string, objective: string): {
@@ -437,7 +296,7 @@ export function buildCursorImplementationPlan(config: CursorAdapterConfig, works
 } {
   if (!objective.trim()) throw new Error("objective is required");
   const cwd = assertSafeConfig(config, workspace);
-  const writablePaths = normalizeWritableWorkspacePaths(config.writableWorkspacePaths);
+  const writablePaths = normalizeSharedWritablePaths(config.writableWorkspacePaths, { label: "Cursor", required: true });
   const deniedRoot = resolve(config.deniedSourceRoot).replaceAll("\\", "/");
   const runtimeRoot = resolve(config.runtimeConfigurationRoot).replaceAll("\\", "/");
   const allow = ["Read(**)", ...writablePaths.map((path) => `Write(${path === "." ? "**" : path})`), ...(config.developmentMode ? ["Shell(*)", "WebFetch(*)"] : [])];
@@ -463,8 +322,8 @@ export function cursorIsolationEnvelopeSha256(config: CursorAdapterConfig, works
   if (!config.isolationAcceptanceHarness || !isAbsolute(config.isolationAcceptanceHarness)) {
     throw new Error("Cursor isolation acceptance harness is not configured");
   }
-  const writablePaths = normalizeWritableWorkspacePaths(config.writableWorkspacePaths ?? []);
-  const projectScope = normalizeProjectScope(config);
+  const writablePaths = normalizeSharedWritablePaths(config.writableWorkspacePaths ?? [], { label: "Cursor", required: true });
+  const projectScope = normalizeSharedProjectScope(config, { label: "Cursor", deniedPaths: "outside-projects" });
   const plan = buildCursorImplementationPlan({ ...config, writableWorkspacePaths: writablePaths }, workspace, "isolation-envelope-fingerprint");
   const launch = buildCursorContainmentLaunch(config, workspace, plan.args, writablePaths);
   const permissionDefinition = launch.args.find((value) => value.startsWith(`permissions.${config.containmentProfile}=`));
@@ -473,27 +332,7 @@ export function cursorIsolationEnvelopeSha256(config: CursorAdapterConfig, works
     .filter((value) => isAbsolute(value) && existsSync(value))
     .map((path) => ({ path: resolve(path), sha256: sha256File(path) }));
   return createHash("sha256").update(JSON.stringify({
-    executable: resolve(config.executable),
-    executableArguments: config.executableArguments ?? [],
-    launcherArtifacts,
-    containmentExecutable: resolve(config.containmentExecutable),
-    containmentProfile: config.containmentProfile,
-    containmentWindowsSandbox: config.containmentWindowsSandbox,
-    workspace: resolve(workspace),
-    deniedSourceRoot: resolve(config.deniedSourceRoot),
-    ...(projectScope ? {
-      assignedProjectRoot: projectScope.assignedProjectRoot,
-      readableProjectRoots: projectScope.readableProjectRoots,
-      deniedParentPaths: projectScope.deniedParentPaths,
-      protectedPaths: projectScope.protectedPaths,
-    } : {}),
-    containedAppData: resolve(config.containedAppData),
-    containedUsername: config.containedUsername,
-    containedUserProfile: resolve(config.containedUserProfile),
-    userInfoShim: resolve(config.userInfoShim),
-    pathVerifierShim: resolve(config.pathVerifierShim),
-    pathVerifierShimSha256: sha256File(config.pathVerifierShim),
-    configurationDirectory: resolve(config.configurationDirectory),
+    ...containedEnvelopeCore(config, workspace, projectScope, launcherArtifacts, sha256File),
     authenticationFile: resolve(config.authenticationFile),
     runtimeConfigurationRoot: resolve(config.runtimeConfigurationRoot),
     writableWorkspacePaths: writablePaths,
@@ -508,21 +347,13 @@ export function cursorIsolationEnvelopeSha256(config: CursorAdapterConfig, works
 
 export function cursorIsolationSecurityState(config: CursorAdapterConfig, workspace: string, receiptPath = config.writeIsolationReceipt ?? config.readIsolationReceipt) {
   if (!receiptPath || !isAbsolute(receiptPath)) throw new Error("Cursor isolation receipt path must be configured before acceptance");
-  const writablePaths = normalizeWritableWorkspacePaths(config.writableWorkspacePaths ?? []);
-  const projectScope = normalizeProjectScope(config);
-  const mutableParents = writableParentChain(workspace, writablePaths);
+  const writablePaths = normalizeSharedWritablePaths(config.writableWorkspacePaths ?? [], { label: "Cursor", required: true });
+  const projectScope = normalizeSharedProjectScope(config, { label: "Cursor", deniedPaths: "outside-projects" });
+  const mutableParents = sharedWritableParentChain(workspace, writablePaths, "Cursor");
   const mutableRoots = [...mutableParents, resolve(config.configurationDirectory), resolve(config.runtimeConfigurationRoot)];
-  return isolationSecurityStateBinding(config.isolationSecurityStateProbe, "cursor", workspace, [
-    workspace, config.deniedSourceRoot, config.executable, config.containmentExecutable,
-    ...(projectScope?.deniedParentPaths ?? []), ...(projectScope?.readableProjectRoots ?? []), ...(projectScope?.protectedPaths ?? []),
-    config.containedAppData, config.containedUserProfile, config.userInfoShim, config.pathVerifierShim, config.authenticationFile,
-    config.configurationDirectory, config.runtimeConfigurationRoot, config.isolationAcceptanceHarness ?? "",
-    join(workspace, ".git"), join(workspace, ".worker-isolation.json"), dirname(resolve(receiptPath)),
-    // Approved output paths and per-job config/runtime children are mutable by
-    // design. Their creation-controlling roots stay ACL-bound; unexpected
-    // workspace siblings remain stable membership-bound security surfaces.
-    ...stableWorkspaceChildren(workspace, writablePaths), ...mutableParents,
-  ].filter(Boolean), mutableRoots);
+  // The shared boundary list also binds the executable's folder and launcher files (it did not for Cursor before).
+  return isolationSecurityStateBinding(config.isolationSecurityStateProbe, "cursor", workspace,
+    containedSecurityBoundaryPaths(config, workspace, projectScope, receiptPath, writablePaths, mutableParents, [config.authenticationFile]), mutableRoots);
 }
 
 function readCursorExecutableVersion(config: CursorAdapterConfig): string {
@@ -541,35 +372,17 @@ function validatedWriteIsolationReceipt(config: CursorAdapterConfig, workspace: 
   }
   if (!existsSync(config.writeIsolationReceipt)) throw new Error("Cursor write-isolation receipt is missing");
   const receipt = JSON.parse(readFileSync(config.writeIsolationReceipt, "utf8")) as CursorWriteIsolationReceipt;
-  const expectedPaths = normalizeWritableWorkspacePaths(config.writableWorkspacePaths);
+  const expectedPaths = normalizeSharedWritablePaths(config.writableWorkspacePaths, { label: "Cursor", required: true });
   const executableVersion = readCursorExecutableVersion(config);
   const securityState = cursorIsolationSecurityState(config, workspace, config.writeIsolationReceipt);
+  const scoped = Boolean(normalizeSharedProjectScope(config, { label: "Cursor", deniedPaths: "outside-projects" }));
   const checks: Array<[string, boolean]> = [
-    ["schema", receipt.schemaVersion === 1], ["executable version", receipt.executableVersion.trim() === executableVersion],
-    ["workspace", resolve(receipt.workspace) === resolve(workspace)], ["executable hash", receipt.executableSha256 === sha256File(config.executable)],
-    ["containment hash", receipt.containmentExecutableSha256 === sha256File(config.containmentExecutable)], ["adapter hash", receipt.adapterSha256 === sha256File(cursorAdapterPath)],
-    ["harness path", !!config.isolationAcceptanceHarness && resolve(receipt.acceptanceHarnessPath) === resolve(config.isolationAcceptanceHarness)],
-    ["harness hash", !!config.isolationAcceptanceHarness && receipt.acceptanceHarnessSha256 === sha256File(config.isolationAcceptanceHarness)],
-    ["permission envelope", receipt.isolationEnvelopeSha256 === cursorIsolationEnvelopeSha256(config, workspace)],
-    ["security probe path", receipt.securityStateProbePath === securityState.securityStateProbePath], ["security probe hash", receipt.securityStateProbeSha256 === securityState.securityStateProbeSha256],
-    ["security boundaries", JSON.stringify(receipt.securityBoundaryPaths) === JSON.stringify(securityState.securityBoundaryPaths)],
-    ["mutable boundary roots", JSON.stringify(receipt.mutableBoundaryRoots) === JSON.stringify(securityState.mutableBoundaryRoots)],
-    ["host security state", receipt.hostSecurityStateFingerprint === securityState.hostSecurityStateFingerprint],
-    ["writable paths", JSON.stringify(receipt.writableWorkspacePaths) === JSON.stringify(expectedPaths)],
-    ["authoritative repository probe", normalizeProjectScope(config) ? receipt.authoritativeRepositoryDenied === false : receipt.authoritativeRepositoryDenied === true], ["outside write probe", receipt.outsideWorkspaceWritesDenied === true],
-    ["unapproved write probe", receipt.unapprovedWorkspaceWritesDenied === true], ["git probe", receipt.gitHistoryDenied === true],
-    ["isolation receipt probe", receipt.isolationReceiptDenied === true], ["containment executable", resolve(receipt.containmentExecutable) === resolve(config.containmentExecutable)],
-    ["containment profile", receipt.containmentProfile === config.containmentProfile], ["containment sandbox", receipt.containmentWindowsSandbox === config.containmentWindowsSandbox],
-    ["contained app data", resolve(receipt.containedAppData) === resolve(config.containedAppData)], ["contained user", receipt.containedUsername === config.containedUsername],
-    ["contained profile", resolve(receipt.containedUserProfile) === resolve(config.containedUserProfile)], ["user shim", resolve(receipt.userInfoShim) === resolve(config.userInfoShim)],
-    ["user shim hash", receipt.userInfoShimSha256 === createHash("sha256").update(readFileSync(config.userInfoShim)).digest("hex").toUpperCase()],
-    ["Cursor sandbox", receipt.cursorSandboxMode === config.sandbox], ["runtime root", resolve(receipt.runtimeConfigurationRoot) === resolve(config.runtimeConfigurationRoot)],
-    ["runtime restriction probe", receipt.runtimeConfigurationWritesRestricted === true], ["runtime write probe", receipt.runtimeConfigurationWriteProbePassed === true],
-    ["runtime neighbor probe", receipt.runtimeConfigurationNeighborDenied === true],
-    ["registered project read probe", !normalizeProjectScope(config) || receipt.registeredProjectReadsAllowed === true],
-    ["unassigned project write probe", !normalizeProjectScope(config) || receipt.unassignedProjectWritesDenied === true],
-    ["protected path probe", !normalizeProjectScope(config) || receipt.protectedPathsDenied === true],
-    ["parent directory probe", !normalizeProjectScope(config) || receipt.parentUserDirectoryDenied === true],
+    ...containedWriteReceiptChecks({ receipt, config, workspace, executableVersion, adapterPath: cursorAdapterPath,
+      envelopeSha256: cursorIsolationEnvelopeSha256(config, workspace), expectedWritablePaths: expectedPaths, scoped, securityState, sha256File }),
+    // Cursor only: a scoped worker may read the authoritative project; .git and the receipt stay unreadable to its tools.
+    ["authoritative repository probe", scoped ? receipt.authoritativeRepositoryDenied === false : receipt.authoritativeRepositoryDenied === true],
+    ["git probe", receipt.gitHistoryDenied === true], ["isolation receipt probe", receipt.isolationReceiptDenied === true],
+    ["Cursor sandbox", receipt.cursorSandboxMode === config.sandbox],
   ];
   const mismatches = checks.filter(([, valid]) => !valid).map(([name]) => name);
   if (mismatches.length > 0) {
@@ -599,10 +412,10 @@ function validatedReadIsolationReceipt(config: CursorAdapterConfig, workspace: s
     || JSON.stringify(receipt.mutableBoundaryRoots) !== JSON.stringify(securityState.mutableBoundaryRoots)
     || receipt.hostSecurityStateFingerprint !== securityState.hostSecurityStateFingerprint
     || resolve(receipt.workspace) !== resolve(workspace)
-    || (normalizeProjectScope(config) ? receipt.authoritativeRepositoryDenied !== false : receipt.authoritativeRepositoryDenied !== true)
+    || (normalizeSharedProjectScope(config, { label: "Cursor", deniedPaths: "outside-projects" }) ? receipt.authoritativeRepositoryDenied !== false : receipt.authoritativeRepositoryDenied !== true)
     || receipt.outsideWorkspaceReadsDenied !== true || receipt.gitHistoryDenied !== true
     || receipt.protectedEvidenceDenied !== true
-    || normalizeProjectScope(config) && (receipt.registeredProjectReadsAllowed !== true
+    || normalizeSharedProjectScope(config, { label: "Cursor", deniedPaths: "outside-projects" }) && (receipt.registeredProjectReadsAllowed !== true
       || receipt.unassignedProjectWritesDenied !== true || receipt.protectedPathsDenied !== true
       || receipt.parentUserDirectoryDenied !== true)) {
     throw new Error("Cursor read-isolation receipt is stale or scoped to a different executable, adapter, harness, workspace, or permission envelope; rerun the approved non-model host acceptance");
@@ -664,7 +477,7 @@ function spawnCursor(
   const effectiveSpawn = options.spawn ?? cursorSpawnForTests;
   return new Promise((resolveResult) => {
     mkdirSync(resolve(configurationDirectory, "tmp"), { recursive: true });
-    const writablePaths = config.readOnlyOnly ? [] : normalizeWritableWorkspacePaths(config.writableWorkspacePaths);
+    const writablePaths = config.readOnlyOnly ? [] : normalizeSharedWritablePaths(config.writableWorkspacePaths, { label: "Cursor", required: true });
     const launch = buildCursorContainmentLaunch(config, workspace, args, writablePaths, configurationDirectory);
     const child = effectiveSpawn(launch.executable, launch.args, {
       cwd: launch.cwd, env: buildCursorEnvironment(config, configurationDirectory, workspace), shell: false, stdio: ["ignore", "pipe", "pipe"],
@@ -835,7 +648,7 @@ function main(): void {
     const objective = values.objective?.trim() || "non-model containment preview";
     const plan = buildCursorImplementationPlan(config, values.workspace, objective);
     console.log(JSON.stringify({ ...buildCursorContainmentLaunch(config, values.workspace, plan.args,
-      normalizeWritableWorkspacePaths(config.writableWorkspacePaths ?? []), values.runtime), launched: false }, null, 2));
+      normalizeSharedWritablePaths(config.writableWorkspacePaths ?? [], { label: "Cursor", required: true }), values.runtime), launched: false }, null, 2));
     return;
   }
   if (!values.workspace || !values.objective) throw new Error("--workspace and --objective are required");

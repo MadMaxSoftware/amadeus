@@ -19,3 +19,24 @@ export function isCredentialVariable(name: string): boolean {
 export function withoutCredentials(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(environment).filter(([name]) => !isCredentialVariable(name)));
 }
+
+/**
+ * The only host variables a Claude-style worker (Claude Code, Grok Build)
+ * inherits: process plumbing. A denylist of known keys misses credentials added
+ * by other tools and user-defined variables, so these CLIs, which need nothing
+ * else from the host, get an allowlist. Codex and Cursor workers still inherit
+ * the host environment minus credentials (withoutCredentials), because the
+ * developer tools they run need it; moving them to an allowlist is open item H9.
+ */
+export const PROCESS_PLUMBING_VARIABLES: readonly string[] = [
+  "PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec",
+  "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER", "PROCESSOR_LEVEL", "PROCESSOR_REVISION",
+  "OS", "NUMBER_OF_PROCESSORS", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
+  "ProgramW6432", "CommonProgramFiles", "CommonProgramFiles(x86)", "CommonProgramW6432",
+  "PUBLIC", "ALLUSERSPROFILE", "USERDOMAIN",
+];
+
+/** Only the process-plumbing variables present in `source`. */
+export function processPlumbingEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(PROCESS_PLUMBING_VARIABLES.filter((key) => source[key] !== undefined).map((key) => [key, source[key]]));
+}

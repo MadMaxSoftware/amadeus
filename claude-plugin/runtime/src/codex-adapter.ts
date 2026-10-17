@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { spawn, spawnSync } from "node:child_process";
 import { verifyWorkspace } from "./worker-isolation.ts";
@@ -9,6 +9,7 @@ import { terminateWorkerTree } from "./worker-process.ts";
 import { isolationSecurityStateBinding } from "./isolation-security-state.ts";
 import { resolveMaximumIdleSeconds } from "./worker-timeouts.ts";
 import { withoutCredentials } from "./worker-environment.ts";
+import { developmentFilesystemPolicy, normalizeProjectScope as normalizeSharedProjectScope, normalizeWritableWorkspacePaths, stableWorkspaceChildren, writableParentChain, type ProjectScope } from "./worker-sandbox.ts";
 
 export type CodexAdapterConfig = {
   executable?: string;
@@ -97,38 +98,6 @@ function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex").toUpperCase();
 }
 
-function stableWorkspaceChildren(path: string, writablePaths: string[]): string[] {
-  if (!existsSync(path)) return [];
-  const mutableTopLevels = new Set(writablePaths.filter((value) => value !== ".").map((value) => value.split("/")[0].toLowerCase()));
-  const allWorkspaceChildrenMutable = writablePaths.includes(".");
-  return readdirSync(path)
-    .filter((name) => [".git", ".worker-isolation.json"].includes(name.toLowerCase())
-      || !allWorkspaceChildrenMutable && !mutableTopLevels.has(name.toLowerCase()))
-    .map((name) => join(path, name));
-}
-
-function writableParentChain(workspace: string, writablePaths: string[]): string[] {
-  const root = resolve(workspace);
-  const parents = new Set<string>([root]);
-  for (const relativePath of writablePaths) {
-    const target = relativePath === "." ? root : resolve(root, relativePath);
-    let parent = existsSync(target) && statSync(target).isDirectory() ? target : dirname(target);
-    if (!existsSync(parent) || !statSync(parent).isDirectory()) {
-      throw new Error(`Writable path parent must be materialized before isolation acceptance: ${relativePath}`);
-    }
-    while (true) {
-      const relativeParent = parent.toLowerCase() === root.toLowerCase() ? "" : parent.slice(root.length + 1);
-      if (parent.toLowerCase() !== root.toLowerCase() && (relativeParent.startsWith("..") || isAbsolute(relativeParent))) {
-        throw new Error(`Writable path parent escapes the worker workspace: ${relativePath}`);
-      }
-      parents.add(parent);
-      if (parent.toLowerCase() === root.toLowerCase()) break;
-      parent = dirname(parent);
-    }
-  }
-  return [...parents];
-}
-
 function readCodexExecutableVersion(executable: string): string {
   const result = spawnSync(executable, ["--version"], { encoding: "utf8", shell: false, timeout: 15_000 });
   if (result.error || result.status !== 0 || !result.stdout.trim()) throw new Error("Codex executable version could not be verified");
@@ -171,96 +140,14 @@ function resolveConfiguredCodexExecutable(config: CodexAdapterConfig): string {
   return resolve(config.executable);
 }
 
-function normalizeWritableWorkspacePaths(paths: string[] | undefined): string[] {
-  if (paths === undefined) return [];
-  if (!Array.isArray(paths)) throw new Error("writableWorkspacePaths must be an array");
-  const normalized = paths.map((value) => {
-    if (value === ".") return value;
-    if (typeof value !== "string" || !value || value.includes("\\") || value.startsWith("/") || /^[A-Za-z]:/.test(value)) {
-      throw new Error("Writable workspace paths must be relative forward-slash paths");
-    }
-    const parts = value.split("/");
-    if (parts.some((part) => !part || part === "." || part === "..") || parts[0].toLowerCase() === ".git" || value === ".worker-isolation.json") {
-      throw new Error("Unsafe writable workspace path");
-    }
-    return value;
-  });
-  if (new Set(normalized).size !== normalized.length) throw new Error("Duplicate writable workspace path");
-  return normalized;
-}
-
-type ProjectScope = { assignedProjectRoot: string; readableProjectRoots: string[]; deniedParentPaths: string[]; protectedPaths: string[]; deniedSensitivePaths?: string[] };
-
-function isWithin(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value === "" || value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value);
-}
-
-function normalizeProjectScope(config: CodexAdapterConfig): ProjectScope | null {
-  const configured = config.assignedProjectRoot !== undefined || config.readableProjectRoots !== undefined || config.deniedParentPaths !== undefined || config.protectedPaths !== undefined;
-  if (!configured) return null;
-  if (!config.assignedProjectRoot || !Array.isArray(config.readableProjectRoots) || !Array.isArray(config.deniedParentPaths) || !Array.isArray(config.protectedPaths)) {
-    throw new Error("Codex project scope requires assignedProjectRoot, readableProjectRoots, deniedParentPaths, and protectedPaths");
-  }
-  const readableProjectRoots = config.readableProjectRoots.map((path) => {
-    if (!isAbsolute(path)) throw new Error("Codex readable project roots must be absolute");
-    const resolved = resolve(path);
-    if (!existsSync(resolved) || !statSync(resolved).isDirectory()) throw new Error(`Codex readable project root is missing: ${resolved}`);
-    return resolved;
-  });
-  if (readableProjectRoots.length === 0 || new Set(readableProjectRoots.map((path) => path.toLowerCase())).size !== readableProjectRoots.length) {
-    throw new Error("Codex readable project roots must be nonempty and unique");
-  }
-  const assignedProjectRoot = resolve(config.assignedProjectRoot);
-  if (!readableProjectRoots.some((path) => isWithin(path, assignedProjectRoot))) {
-    throw new Error("Codex assigned project must be inside a readable account root");
-  }
-  const deniedParentPaths = config.deniedParentPaths.map((path) => {
-    if (!isAbsolute(path)) throw new Error("Codex denied parent paths must be absolute");
-    return resolve(path);
-  });
-  if (deniedParentPaths.length === 0 || new Set(deniedParentPaths.map((path) => path.toLowerCase())).size !== deniedParentPaths.length
-    || !readableProjectRoots.every((project) => deniedParentPaths.some((parent) => isWithin(parent, project) && parent.toLowerCase() !== project.toLowerCase()))) {
-    throw new Error("Codex denied parent paths must be unique ancestors of every readable project root");
-  }
-  const protectedPaths = config.protectedPaths.map((path) => {
-    if (!isAbsolute(path)) throw new Error("Codex protected paths must be absolute");
-    const resolved = resolve(path);
-    if (!readableProjectRoots.some((root) => isWithin(root, resolved)) || readableProjectRoots.some((root) => root.toLowerCase() === resolved.toLowerCase())) {
-      throw new Error("Codex protected paths must be strict children of registered project roots");
-    }
-    return resolved;
-  });
-  if (new Set(protectedPaths.map((path) => path.toLowerCase())).size !== protectedPaths.length) {
-    throw new Error("Codex protected paths must be unique");
-  }
-  const deniedSensitivePaths = (config.deniedSensitivePaths ?? []).map((path) => {
-    if (!isAbsolute(path)) throw new Error("Codex denied sensitive paths must be absolute");
-    const resolved = resolve(path);
-    if (readableProjectRoots.some((root) => isWithin(resolved, root))) throw new Error("A denied sensitive path must not contain a readable project root");
-    return resolved;
-  });
-  return { assignedProjectRoot, readableProjectRoots, deniedParentPaths, protectedPaths, deniedSensitivePaths };
-}
-
-export function projectFilesystemPolicy(scope: ProjectScope, workspace: string, writablePaths: string[], workspacePermissions: string,
+export function projectFilesystemPolicy(scope: ProjectScope, workspace: string, writablePaths: string[], _workspacePermissions: string,
   developmentMode: boolean, protectedEvidenceRoot: string): string {
   if (!isAbsolute(protectedEvidenceRoot)) throw new Error("Codex protected evidence root must be absolute");
-  const parentDenies = scope.deniedParentPaths.map((path) => `,${JSON.stringify(path)}="deny"`).join("");
-  const sensitiveDenies = (scope.deniedSensitivePaths ?? []).map((path) => `,${JSON.stringify(path)}="deny"`).join("");
-  const reads = scope.readableProjectRoots.map((path) => `,${JSON.stringify(path)}="read"`).join("");
-  const denies = scope.protectedPaths.map((path) => `,${JSON.stringify(path)}="deny"`).join("");
-  const evidenceDeny = `,${JSON.stringify(resolve(protectedEvidenceRoot))}="deny"`;
-  const workspaceRoot = resolve(workspace);
-  const absoluteWorkspace = `,${JSON.stringify(workspaceRoot)}="${writablePaths.includes(".") ? "write" : "read"}"`;
-  const absoluteWrites = writablePaths.filter((path) => path !== ".")
-    .map((path) => `,${JSON.stringify(resolve(workspaceRoot, path))}="write"`).join("");
-  const metadata = [".git", ".worker-isolation.json"]
-    .map((path) => `,${JSON.stringify(resolve(workspaceRoot, path))}="${developmentMode ? "read" : "deny"}"`).join("");
   // Current elevated Windows sandboxes require an effective root-read baseline.
   // Preserve Amadeus's narrower boundary with explicit parent, evidence, and
   // protected-path denies, followed by exact project/workspace allowances.
-  return `":root"="read",":minimal"="read"${parentDenies}${sensitiveDenies}${evidenceDeny}${reads}${denies}${absoluteWorkspace}${absoluteWrites}${metadata},":workspace_roots"={${workspacePermissions}}`;
+  return developmentFilesystemPolicy({ scope, extraDenies: [protectedEvidenceRoot], workspace, writablePaths,
+    metadataAccess: developmentMode ? "read" : "deny" });
 }
 
 export function buildCodexInvocation(
@@ -281,7 +168,7 @@ export function buildCodexInvocation(
   }
   verifyWorkspace(workspace, { allowWorkingChanges: options.allowWorkingChanges });
   const writablePaths = normalizeWritableWorkspacePaths(config.writableWorkspacePaths);
-  const projectScope = normalizeProjectScope(config);
+  const projectScope = normalizeSharedProjectScope(config, { label: "Codex", deniedPaths: "ancestors" });
   const scopedMetadataPermission = config.developmentMode ? "read" : "deny";
   const scopedWorkspacePermissions = `"."="${writablePaths.includes(".") ? "write" : "read"}"${writablePaths.filter((p) => p !== ".").map((p) => `,${JSON.stringify(p)}="write"`).join("")},".git"="${scopedMetadataPermission}",".worker-isolation.json"="${scopedMetadataPermission}"`;
   if (projectScope && (!config.isolationReceipt || !isAbsolute(config.isolationReceipt))) {
@@ -362,7 +249,7 @@ export function codexIsolationEnvelope(config: CodexAdapterConfig, workspace: st
     throw new Error("Codex isolation receipt path must be configured before acceptance");
   }
   const writablePaths = normalizeWritableWorkspacePaths(config.writableWorkspacePaths);
-  const projectScope = normalizeProjectScope(config);
+  const projectScope = normalizeSharedProjectScope(config, { label: "Codex", deniedPaths: "ancestors" });
   const mutableParents = writableParentChain(workspace, writablePaths);
   const securityState = isolationSecurityStateBinding(config.isolationSecurityStateProbe, "codex", workspace, [
     workspace, config.deniedSourceRoot, executablePath, codeModeHost, config.isolationAcceptanceHarness,

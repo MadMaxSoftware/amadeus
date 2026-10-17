@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
@@ -7,6 +7,9 @@ import { verifyWorkspace } from "./worker-isolation.ts";
 import { terminateWorkerTree } from "./worker-process.ts";
 import { WORKER_RUNTIME_DIRECTORY, workerRuntimeLayout } from "./worker-runtime-layout.ts";
 import { isolationSecurityStateBinding } from "./isolation-security-state.ts";
+import { assertNoWorkspaceReparsePoints, containedLaunch, denyByDefaultFilesystemPolicy, developmentFilesystemPolicy, normalizeProjectScope as normalizeSharedProjectScope, normalizeWritableWorkspacePaths as normalizeSharedWritablePaths, workspacePermissionEntries, writableParentChain as sharedWritableParentChain } from "./worker-sandbox.ts";
+import { containedEnvelopeCore, containedSecurityBoundaryPaths, containedWriteReceiptChecks } from "./worker-receipts.ts";
+import { processPlumbingEnvironment } from "./worker-environment.ts";
 
 export type ClaudeAdapterConfig = {
   schemaVersion: 1;
@@ -205,89 +208,6 @@ function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex").toUpperCase();
 }
 
-function normalizeWritableWorkspacePaths(paths: string[] | undefined): string[] {
-  if (!Array.isArray(paths)) throw new Error("Claude writableWorkspacePaths must be an array");
-  const normalized = paths.map((value) => {
-    if (value === ".") return value;
-    if (typeof value !== "string" || !value || value.includes("\\") || value.startsWith("/") || /^[A-Za-z]:/.test(value)) {
-      throw new Error("Claude writable paths must be relative forward-slash paths");
-    }
-    const parts = value.split("/");
-    if (parts.some((part) => !part || part === "." || part === "..") || parts[0].toLowerCase() === ".git"
-      || parts[0].toLowerCase() === WORKER_RUNTIME_DIRECTORY || value === ".worker-isolation.json") {
-      throw new Error("Unsafe Claude writable path");
-    }
-    return value;
-  });
-  if (new Set(normalized.map((value) => value.toLowerCase())).size !== normalized.length) {
-    throw new Error("Duplicate Claude writable path");
-  }
-  return normalized;
-}
-
-type ProjectScope = { assignedProjectRoot: string; readableProjectRoots: string[]; deniedParentPaths: string[]; protectedPaths: string[] };
-
-function isWithin(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value === "" || value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value);
-}
-
-function normalizeProjectScope(config: ClaudeAdapterConfig): ProjectScope | null {
-  const configured = config.assignedProjectRoot !== undefined || config.readableProjectRoots !== undefined
-    || config.deniedParentPaths !== undefined || config.protectedPaths !== undefined;
-  if (!configured) return null;
-  if (!config.assignedProjectRoot || !Array.isArray(config.readableProjectRoots)
-    || !Array.isArray(config.deniedParentPaths) || !Array.isArray(config.protectedPaths)) {
-    throw new Error("Claude project scope requires assignedProjectRoot, readableProjectRoots, deniedParentPaths, and protectedPaths");
-  }
-  const readableProjectRoots = config.readableProjectRoots.map((path) => {
-    if (!isAbsolute(path)) throw new Error("Claude readable project roots must be absolute");
-    const resolved = resolve(path);
-    if (!existsSync(resolved) || !statSync(resolved).isDirectory()) throw new Error(`Claude readable project root is missing: ${resolved}`);
-    return resolved;
-  });
-  if (readableProjectRoots.length === 0 || new Set(readableProjectRoots.map((path) => path.toLowerCase())).size !== readableProjectRoots.length) {
-    throw new Error("Claude readable project roots must be nonempty and unique");
-  }
-  const assignedProjectRoot = resolve(config.assignedProjectRoot);
-  if (!readableProjectRoots.some((path) => isWithin(path, assignedProjectRoot))) {
-    throw new Error("Claude assigned project must be inside a readable account root");
-  }
-  const deniedParentPaths = config.deniedParentPaths.map((path) => {
-    if (!isAbsolute(path)) throw new Error("Claude denied parent paths must be absolute");
-    return resolve(path);
-  });
-  if (deniedParentPaths.length === 0 || new Set(deniedParentPaths.map((path) => path.toLowerCase())).size !== deniedParentPaths.length
-    || deniedParentPaths.some((denied) => readableProjectRoots.some((root) => isWithin(denied, root)))) {
-    throw new Error("Claude denied user paths must be unique and must not contain readable account roots");
-  }
-  const protectedPaths = config.protectedPaths.map((path) => {
-    if (!isAbsolute(path)) throw new Error("Claude protected paths must be absolute");
-    const resolved = resolve(path);
-    if (!readableProjectRoots.some((root) => isWithin(root, resolved)) || readableProjectRoots.some((root) => root.toLowerCase() === resolved.toLowerCase())) {
-      throw new Error("Claude protected paths must be strict children of registered project roots");
-    }
-    return resolved;
-  });
-  if (new Set(protectedPaths.map((path) => path.toLowerCase())).size !== protectedPaths.length) {
-    throw new Error("Claude protected paths must be unique");
-  }
-  return { assignedProjectRoot, readableProjectRoots, deniedParentPaths, protectedPaths };
-}
-
-function assertNoWorkspaceReparsePoints(workspace: string): void {
-  const pending = [workspace];
-  while (pending.length > 0) {
-    const current = pending.pop()!;
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const path = join(current, entry.name);
-      const info = lstatSync(path);
-      if (info.isSymbolicLink()) throw new Error(`Claude workspace contains a prohibited reparse point: ${path}`);
-      if (info.isDirectory()) pending.push(path);
-    }
-  }
-}
-
 function assertSafeConfig(config: ClaudeAdapterConfig, workspace: string): string {
   if (config.schemaVersion !== 1) throw new Error("Unsupported Claude adapter config");
   if (config.authentication !== "subscription-signin" || config.apiKeyAuthenticationAllowed !== false) {
@@ -326,7 +246,7 @@ function assertSafeConfig(config: ClaudeAdapterConfig, workspace: string): strin
     throw new Error("Claude workspace must not be inside the authoritative repository");
   }
   verifyWorkspace(resolvedWorkspace);
-  assertNoWorkspaceReparsePoints(resolvedWorkspace);
+  assertNoWorkspaceReparsePoints(resolvedWorkspace, "Claude");
   return resolvedWorkspace;
 }
 
@@ -361,16 +281,8 @@ export function buildClaudeEnvironment(
   const containedHomePath = containedDrive ? containedProfile.slice(containedDrive.length) : containedProfile;
   const temporaryDirectory = resolve(resolvedConfigurationDirectory, "tmp");
   const environment: NodeJS.ProcessEnv = {
-    // Workers inherit only process plumbing. A denylist of known API keys
-    // misses credentials added by other tools and user-defined variables.
-    ...Object.fromEntries([
-      "PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec",
-      "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER", "PROCESSOR_LEVEL", "PROCESSOR_REVISION",
-      "OS", "NUMBER_OF_PROCESSORS", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
-      "ProgramW6432", "CommonProgramFiles", "CommonProgramFiles(x86)", "CommonProgramW6432",
-      "PUBLIC", "ALLUSERSPROFILE", "USERDOMAIN",
-    ].filter((key) => sourceEnvironment[key] !== undefined)
-      .map((key) => [key, sourceEnvironment[key]])),
+    // Workers inherit only process plumbing (see worker-environment.ts).
+    ...processPlumbingEnvironment(sourceEnvironment),
     CI: "1",
     AMADEUS_WORKER: "1",
     APPDATA: resolve(config.containedAppData),
@@ -410,75 +322,37 @@ export function buildClaudeInvocation(config: ClaudeAdapterConfig, workspace: st
   return args;
 }
 
-function projectFilesystemPolicy(scope: ProjectScope, workspacePermissions: string, absoluteWorkspaceWrites: string[], runtimePermissions: string, processReadPaths: string[],
-  development: { evidenceRoot: string | null } | null = null): string {
-  if (development) {
-    // Same shape as a Codex development worker: read baseline, then the
-    // credential/personal folders, protected evidence and protected project
-    // paths denied, then exact project, process and workspace allowances.
-    const denies = [...scope.deniedParentPaths, ...(development.evidenceRoot ? [development.evidenceRoot] : [])]
-      .map((path) => `,${JSON.stringify(path)}="deny"`).join("");
-    const reads = [...scope.readableProjectRoots, ...processReadPaths.map((path) => resolve(path))]
-      .map((path) => `,${JSON.stringify(path)}="read"`).join("");
-    const protectedDenies = scope.protectedPaths.map((path) => `,${JSON.stringify(path)}="deny"`).join("");
-    const exactWrites = absoluteWorkspaceWrites.map((path) => `,${JSON.stringify(path)}="write"`).join("");
-    return `":root"="read",":minimal"="read"${denies}${reads}${protectedDenies},":workspace_roots"={${workspacePermissions}}${exactWrites}${runtimePermissions}`;
-  }
-  const traversalReads = [...new Set(scope.readableProjectRoots.map((path) => dirname(path)))]
-    .map((path) => `,${JSON.stringify(path)}="read"`).join("");
-  const parentDenies = scope.deniedParentPaths.map((path) => `,${JSON.stringify(path)}="deny"`).join("");
-  const reads = scope.readableProjectRoots.map((path) => `,${JSON.stringify(path)}="read"`).join("");
-  const denies = scope.protectedPaths.map((path) => `,${JSON.stringify(path)}="deny"`).join("");
-  const processReads = processReadPaths.map((path) => `,${JSON.stringify(resolve(path))}="read"`).join("");
-  const exactWrites = absoluteWorkspaceWrites.map((path) => `,${JSON.stringify(path)}="write"`).join("");
-  return `":root"="deny",":minimal"="read"${traversalReads}${parentDenies}${reads}${denies}${processReads},":workspace_roots"={${workspacePermissions}}${exactWrites}${runtimePermissions}`;
-}
-
 export function buildClaudeContainmentLaunch(
   config: ClaudeAdapterConfig,
   workspace: string,
-  claudeArgs: string[],
+  workerArgs: string[],
   writableWorkspacePaths: string[] = [],
   runtimeWritableDirectory?: string,
 ): { executable: string; args: string[]; cwd: string } {
   const cwd = assertSafeConfig(config, workspace);
-  const writablePaths = writableWorkspacePaths.length > 0
-    ? normalizeWritableWorkspacePaths(writableWorkspacePaths)
-    : [];
+  const writablePaths = writableWorkspacePaths.length > 0 ? normalizeSharedWritablePaths(writableWorkspacePaths, { label: "Claude", required: true }) : [];
   const deniedRoot = resolve(config.deniedSourceRoot);
   const runtimeWrite = runtimeWritableDirectory ? resolve(runtimeWritableDirectory) : null;
   const runtimePermissions = workerRuntimeLayout(config.runtimeConfigurationRoot, runtimeWrite ?? undefined);
-  const workspacePermissions = [
-    `"."="${writablePaths.includes(".") ? "write" : "read"}"`,
-    ...writablePaths.filter((path) => path !== ".").map((path) => `${JSON.stringify(path)}="write"`),
-    `".git"="${config.developmentMode ? "read" : "deny"}"`,
-    `".worker-isolation.json"="${config.developmentMode ? "read" : "deny"}"`,
-  ].join(",");
-  const projectScope = normalizeProjectScope(config);
+  const metadataAccess = config.developmentMode ? "read" : "deny";
+  const workspacePermissions = workspacePermissionEntries(writablePaths, metadataAccess);
+  const projectScope = normalizeSharedProjectScope(config, { label: "Claude", deniedPaths: "outside-projects" });
   const absoluteWorkspaceWrites = [...new Set(writablePaths.map((path) => resolve(cwd, path)))];
   const launcherReadPaths = (config.executableArguments ?? [])
     .filter((value) => isAbsolute(value) && existsSync(value))
     .flatMap((path) => [resolve(path), dirname(resolve(path))]);
-  const filesystem = projectScope
-    ? projectFilesystemPolicy(projectScope, workspacePermissions, absoluteWorkspaceWrites, runtimePermissions,
-      [dirname(config.executable), ...launcherReadPaths, config.containedAppData, config.configurationDirectory, config.userInfoShim, config.pathVerifierShim],
-      config.developmentMode && !config.readOnlyOnly
-        ? { evidenceRoot: config.writeIsolationReceipt && isAbsolute(config.writeIsolationReceipt) ? dirname(resolve(config.writeIsolationReceipt)) : null }
-        : null)
-    : `":root"="read",":workspace_roots"={${workspacePermissions}},${JSON.stringify(deniedRoot)}="${config.developmentMode ? "read" : "deny"}"${runtimePermissions}`;
-  const permissionDefinition = `{description="Claude contained worker",filesystem={${filesystem}},network={enabled=true}}`;
-  return {
-    executable: config.containmentExecutable,
-    args: [
-      "sandbox", "-C", cwd,
-      "-c", `windows.sandbox=${JSON.stringify(config.containmentWindowsSandbox)}`,
-      "-c", `permissions.${config.containmentProfile}=${permissionDefinition}`,
-      "-c", `default_permissions=${JSON.stringify(config.containmentProfile)}`,
-      "-P", config.containmentProfile,
-      "--", config.executable, ...(config.executableArguments ?? []), ...claudeArgs,
-    ],
-    cwd,
-  };
+  const processReadPaths = [dirname(config.executable), ...launcherReadPaths, config.containedAppData, config.configurationDirectory,
+    config.userInfoShim, config.pathVerifierShim];
+  const filesystem = !projectScope
+    ? `":root"="read",":workspace_roots"={${workspacePermissions}},${JSON.stringify(deniedRoot)}="${config.developmentMode ? "read" : "deny"}"${runtimePermissions}`
+    : config.developmentMode && !config.readOnlyOnly
+      // The same development policy as Codex workers (see worker-sandbox.ts).
+      ? developmentFilesystemPolicy({ scope: projectScope, workspace: cwd, writablePaths, metadataAccess, processReadPaths, runtimePermissions,
+        extraDenies: config.writeIsolationReceipt && isAbsolute(config.writeIsolationReceipt) ? [dirname(resolve(config.writeIsolationReceipt))] : [] })
+      : denyByDefaultFilesystemPolicy({ scope: projectScope, workspacePermissions, absoluteWorkspaceWrites, runtimePermissions, processReadPaths });
+  return containedLaunch({ containmentExecutable: config.containmentExecutable, sandbox: config.containmentWindowsSandbox,
+    profile: config.containmentProfile, description: "Claude contained worker", filesystem, networkEnabled: true,
+    cwd, executable: config.executable, executableArguments: config.executableArguments, args: workerArgs });
 }
 
 export function buildClaudeImplementationPlan(config: ClaudeAdapterConfig, workspace: string, objective: string): {
@@ -489,7 +363,7 @@ export function buildClaudeImplementationPlan(config: ClaudeAdapterConfig, works
 } {
   if (!objective.trim()) throw new Error("objective is required");
   const cwd = assertSafeConfig(config, workspace);
-  normalizeWritableWorkspacePaths(config.writableWorkspacePaths);
+  normalizeSharedWritablePaths(config.writableWorkspacePaths, { label: "Claude", required: true });
   if (config.cli === "grok") {
     if (!config.developmentMode || config.readOnlyOnly) throw new Error("Grok workers run only as development workers");
     const args = [...grokDevelopmentArguments(config.workerCommandsEnabled !== false, config), "-p", objective.trim()];
@@ -505,44 +379,12 @@ export function buildClaudeImplementationPlan(config: ClaudeAdapterConfig, works
   return { executable: config.executable, args, cwd, launched: false };
 }
 
-function stableWorkspaceChildren(path: string, writablePaths: string[]): string[] {
-  if (!existsSync(path)) return [];
-  const mutableTopLevels = new Set(writablePaths.filter((value) => value !== ".").map((value) => value.split("/")[0].toLowerCase()));
-  const allWorkspaceChildrenMutable = writablePaths.includes(".");
-  return readdirSync(path)
-    .filter((name) => [".git", ".worker-isolation.json", WORKER_RUNTIME_DIRECTORY].includes(name.toLowerCase())
-      || !allWorkspaceChildrenMutable && !mutableTopLevels.has(name.toLowerCase()))
-    .map((name) => join(path, name));
-}
-
-function writableParentChain(workspace: string, writablePaths: string[]): string[] {
-  const root = resolve(workspace);
-  const parents = new Set<string>([root]);
-  for (const relativePath of writablePaths) {
-    const target = relativePath === "." ? root : resolve(root, relativePath);
-    let parent = existsSync(target) && statSync(target).isDirectory() ? target : dirname(target);
-    if (!existsSync(parent) || !statSync(parent).isDirectory()) {
-      throw new Error(`Claude writable path parent must be materialized before isolation acceptance: ${relativePath}`);
-    }
-    while (true) {
-      const relativeParent = parent.toLowerCase() === root.toLowerCase() ? "" : relative(root, parent);
-      if (parent.toLowerCase() !== root.toLowerCase() && (relativeParent.startsWith(`..${sep}`) || relativeParent === ".." || isAbsolute(relativeParent))) {
-        throw new Error(`Claude writable path parent escapes the worker workspace: ${relativePath}`);
-      }
-      parents.add(parent);
-      if (parent.toLowerCase() === root.toLowerCase()) break;
-      parent = dirname(parent);
-    }
-  }
-  return [...parents];
-}
-
 export function claudeIsolationEnvelopeSha256(config: ClaudeAdapterConfig, workspace: string): string {
   if (!config.isolationAcceptanceHarness || !isAbsolute(config.isolationAcceptanceHarness)) {
     throw new Error("Claude isolation acceptance harness is not configured");
   }
-  const writablePaths = normalizeWritableWorkspacePaths(config.writableWorkspacePaths ?? []);
-  const projectScope = normalizeProjectScope(config);
+  const writablePaths = normalizeSharedWritablePaths(config.writableWorkspacePaths ?? [], { label: "Claude", required: true });
+  const projectScope = normalizeSharedProjectScope(config, { label: "Claude", deniedPaths: "outside-projects" });
   const plan = buildClaudeImplementationPlan({ ...config, writableWorkspacePaths: writablePaths }, workspace, "isolation-envelope-fingerprint");
   const launch = buildClaudeContainmentLaunch(config, workspace, plan.args, writablePaths);
   const permissionDefinition = launch.args.find((value) => value.startsWith(`permissions.${config.containmentProfile}=`));
@@ -551,27 +393,7 @@ export function claudeIsolationEnvelopeSha256(config: ClaudeAdapterConfig, works
     .filter((value) => isAbsolute(value) && existsSync(value))
     .map((path) => ({ path: resolve(path), sha256: sha256File(path) }));
   const payload = JSON.stringify({
-    executable: resolve(config.executable),
-    executableArguments: config.executableArguments ?? [],
-    launcherArtifacts,
-    containmentExecutable: resolve(config.containmentExecutable),
-    containmentProfile: config.containmentProfile,
-    containmentWindowsSandbox: config.containmentWindowsSandbox,
-    workspace: resolve(workspace),
-    deniedSourceRoot: resolve(config.deniedSourceRoot),
-    ...(projectScope ? {
-      assignedProjectRoot: projectScope.assignedProjectRoot,
-      readableProjectRoots: projectScope.readableProjectRoots,
-      deniedParentPaths: projectScope.deniedParentPaths,
-      protectedPaths: projectScope.protectedPaths,
-    } : {}),
-    containedAppData: resolve(config.containedAppData),
-    containedUsername: config.containedUsername,
-    containedUserProfile: resolve(config.containedUserProfile),
-    userInfoShim: resolve(config.userInfoShim),
-    pathVerifierShim: resolve(config.pathVerifierShim),
-    pathVerifierShimSha256: sha256File(config.pathVerifierShim),
-    configurationDirectory: resolve(config.configurationDirectory),
+    ...containedEnvelopeCore(config, workspace, projectScope, launcherArtifacts, sha256File),
     runtimeConfigurationRoot: resolve(config.runtimeConfigurationRoot),
     writableWorkspacePaths: writablePaths,
     authentication: config.authentication,
@@ -590,20 +412,13 @@ export function claudeIsolationSecurityState(
   workspace: string,
   receiptPath = config.writeIsolationReceipt ?? config.readIsolationReceipt,
 ) {
-  const writablePaths = normalizeWritableWorkspacePaths(config.writableWorkspacePaths ?? []);
+  const writablePaths = normalizeSharedWritablePaths(config.writableWorkspacePaths ?? [], { label: "Claude", required: true });
   if (!receiptPath || !isAbsolute(receiptPath)) throw new Error("Claude isolation receipt path must be configured before acceptance");
-  const projectScope = normalizeProjectScope(config);
-  const mutableParents = writableParentChain(workspace, writablePaths);
+  const projectScope = normalizeSharedProjectScope(config, { label: "Claude", deniedPaths: "outside-projects" });
+  const mutableParents = sharedWritableParentChain(workspace, writablePaths, "Claude");
   const mutableRoots = [...mutableParents, resolve(config.configurationDirectory), resolve(config.runtimeConfigurationRoot)];
-  return isolationSecurityStateBinding(config.isolationSecurityStateProbe, "claude", workspace, [
-    workspace, config.deniedSourceRoot, config.executable, dirname(config.executable), config.containmentExecutable,
-    ...(config.executableArguments ?? []).filter((value) => isAbsolute(value)).flatMap((path) => [path, dirname(path)]),
-    ...(projectScope?.deniedParentPaths ?? []), ...(projectScope?.readableProjectRoots ?? []), ...(projectScope?.protectedPaths ?? []),
-    config.containedAppData, config.containedUserProfile, config.userInfoShim, config.pathVerifierShim,
-    config.configurationDirectory, config.runtimeConfigurationRoot, config.isolationAcceptanceHarness ?? "",
-    join(workspace, ".git"), join(workspace, ".worker-isolation.json"), dirname(resolve(receiptPath)),
-    ...stableWorkspaceChildren(workspace, writablePaths), ...mutableParents,
-  ].filter(Boolean), mutableRoots);
+  return isolationSecurityStateBinding(config.isolationSecurityStateProbe, "claude", workspace,
+    containedSecurityBoundaryPaths(config, workspace, projectScope, receiptPath, writablePaths, mutableParents), mutableRoots);
 }
 
 function readClaudeExecutableVersion(config: ClaudeAdapterConfig): string {
@@ -625,34 +440,17 @@ function validatedWriteIsolationReceipt(config: ClaudeAdapterConfig, workspace: 
   }
   if (!existsSync(config.writeIsolationReceipt)) throw new Error("Claude write-isolation receipt is missing");
   const receipt = JSON.parse(readFileSync(config.writeIsolationReceipt, "utf8")) as ClaudeWriteIsolationReceipt;
-  const expectedPaths = normalizeWritableWorkspacePaths(config.writableWorkspacePaths);
+  const expectedPaths = normalizeSharedWritablePaths(config.writableWorkspacePaths, { label: "Claude", required: true });
   const executableVersion = readClaudeExecutableVersion(config);
   const securityState = claudeIsolationSecurityState(config, workspace, config.writeIsolationReceipt);
+  const scoped = Boolean(normalizeSharedProjectScope(config, { label: "Claude", deniedPaths: "outside-projects" }));
   const checks: Array<[string, boolean]> = [
-    ["schema", receipt.schemaVersion === 1], ["executable version", receipt.executableVersion.trim() === executableVersion],
-    ["workspace", resolve(receipt.workspace) === resolve(workspace)], ["executable hash", receipt.executableSha256 === sha256File(config.executable)],
-    ["containment hash", receipt.containmentExecutableSha256 === sha256File(config.containmentExecutable)], ["adapter hash", receipt.adapterSha256 === sha256File(claudeAdapterPath)],
-    ["harness path", !!config.isolationAcceptanceHarness && resolve(receipt.acceptanceHarnessPath) === resolve(config.isolationAcceptanceHarness)],
-    ["harness hash", !!config.isolationAcceptanceHarness && receipt.acceptanceHarnessSha256 === sha256File(config.isolationAcceptanceHarness)],
-    ["permission envelope", receipt.isolationEnvelopeSha256 === claudeIsolationEnvelopeSha256(config, workspace)],
-    ["security probe path", receipt.securityStateProbePath === securityState.securityStateProbePath], ["security probe hash", receipt.securityStateProbeSha256 === securityState.securityStateProbeSha256],
-    ["security boundaries", JSON.stringify(receipt.securityBoundaryPaths) === JSON.stringify(securityState.securityBoundaryPaths)],
-    ["mutable boundary roots", JSON.stringify(receipt.mutableBoundaryRoots) === JSON.stringify(securityState.mutableBoundaryRoots)],
-    ["host security state", receipt.hostSecurityStateFingerprint === securityState.hostSecurityStateFingerprint],
-    ["writable paths", JSON.stringify(receipt.writableWorkspacePaths) === JSON.stringify(expectedPaths)],
-    ["authoritative repository probe", receipt.authoritativeRepositoryDenied === !development], ["outside write probe", receipt.outsideWorkspaceWritesDenied === true],
-    ["unapproved write probe", receipt.unapprovedWorkspaceWritesDenied === true],
+    ...containedWriteReceiptChecks({ receipt, config, workspace, executableVersion, adapterPath: claudeAdapterPath,
+      envelopeSha256: claudeIsolationEnvelopeSha256(config, workspace), expectedWritablePaths: expectedPaths, scoped, securityState, sha256File }),
+    // Claude-style only: development workers may read the project, .git and the receipt; writes stay denied.
+    ["authoritative repository probe", receipt.authoritativeRepositoryDenied === !development],
     ["git probe", development ? receipt.gitHistoryWritesDenied === true : receipt.gitHistoryDenied === true],
-    ["isolation receipt probe", development ? receipt.isolationReceiptWritesDenied === true : receipt.isolationReceiptDenied === true], ["containment executable", resolve(receipt.containmentExecutable) === resolve(config.containmentExecutable)],
-    ["containment profile", receipt.containmentProfile === config.containmentProfile], ["containment sandbox", receipt.containmentWindowsSandbox === config.containmentWindowsSandbox],
-    ["contained app data", resolve(receipt.containedAppData) === resolve(config.containedAppData)], ["contained user", receipt.containedUsername === config.containedUsername],
-    ["contained profile", resolve(receipt.containedUserProfile) === resolve(config.containedUserProfile)], ["user shim", resolve(receipt.userInfoShim) === resolve(config.userInfoShim)],
-    ["user shim hash", receipt.userInfoShimSha256 === sha256File(config.userInfoShim)], ["runtime root", resolve(receipt.runtimeConfigurationRoot) === resolve(config.runtimeConfigurationRoot)],
-    ["runtime restriction probe", receipt.runtimeConfigurationWritesRestricted === true], ["runtime write probe", receipt.runtimeConfigurationWriteProbePassed === true],
-    ["runtime neighbor probe", receipt.runtimeConfigurationNeighborDenied === true], ["registered project read probe", !normalizeProjectScope(config) || receipt.registeredProjectReadsAllowed === true],
-    ["unassigned project write probe", !normalizeProjectScope(config) || receipt.unassignedProjectWritesDenied === true],
-    ["protected path probe", !normalizeProjectScope(config) || receipt.protectedPathsDenied === true],
-    ["parent directory probe", !normalizeProjectScope(config) || receipt.parentUserDirectoryDenied === true],
+    ["isolation receipt probe", development ? receipt.isolationReceiptWritesDenied === true : receipt.isolationReceiptDenied === true],
     ["API billing", receipt.apiKeyAuthenticationAllowed === false], ["credential copying", receipt.credentialsCopied === false],
     ["authentication directory probe", receipt.authenticationDirectoryReadAllowed === true],
   ];
@@ -695,7 +493,7 @@ function spawnClaude(
   const effectiveSpawn = options.spawn ?? claudeSpawnForTests;
   return new Promise((resolveResult) => {
     mkdirSync(resolve(configurationDirectory, "tmp"), { recursive: true });
-    const writablePaths = config.readOnlyOnly ? [] : normalizeWritableWorkspacePaths(config.writableWorkspacePaths);
+    const writablePaths = config.readOnlyOnly ? [] : normalizeSharedWritablePaths(config.writableWorkspacePaths, { label: "Claude", required: true });
     const launch = buildClaudeContainmentLaunch(config, workspace, args, writablePaths, configurationDirectory);
     const child = effectiveSpawn(launch.executable, launch.args, {
       cwd: launch.cwd,
@@ -874,7 +672,7 @@ export function qualifyClaudeDispatchBoundaries(config: ClaudeAdapterConfig, wor
   patch: boolean;
 } {
   assertSafeConfig(config, workspace);
-  const writable = normalizeWritableWorkspacePaths(config.writableWorkspacePaths ?? []);
+  const writable = normalizeSharedWritablePaths(config.writableWorkspacePaths ?? [], { label: "Claude", required: true });
   return {
     workspace: true,
     reads: true,
