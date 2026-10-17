@@ -1,7 +1,7 @@
 {
   "name": "amadeus",
   "displayName": "Amadeus",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Amadeus local coordinator candidate",
   "author": {
     "name": "Mad Max Systems"

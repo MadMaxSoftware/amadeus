@@ -1,6 +1,6 @@
 # Claude Code host integration
 
-Status: Published in Amadeus 0.4.1. The public GitHub repository is a Claude
+Status: Published in Amadeus 0.4.2. The public GitHub repository is a Claude
 Code marketplace containing a generated Claude host plugin backed by the same
 shared Amadeus engine as Codex. Marketplace install/enable/SessionStart evidence
 is collected with the signed-in Claude Code CLI under a reversible isolated

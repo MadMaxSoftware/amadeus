@@ -182,16 +182,16 @@ Claude Code upgrade command.
 
 ## Current release
 
-Version **0.4.1** makes Codex and Claude equal workers:
-- whichever provider is installed runs; with both, workers use the one the host
-  chat is not on, unless you set a preference;
-- Claude workers get the same sandbox as Codex and need no separate setup;
-- reports say "Integrity check only" when no project tests ran, and pytest, Go
-  and .NET runners can be enabled per project;
-- unused update-staging code is removed.
+Version **0.4.2** routes work economically and applies one set of rules to
+every AI:
+- workers use your chat's own provider and the cheapest tier that fits; the
+  other provider takes over when the first fails or reaches its usage limit;
+- tiers instead of model names, so model updates need no Amadeus update;
+- one shared set of sandbox and safety rules for Codex, Claude and Cursor;
+- Grok as an opt-in preview.
 
-Full notes: [docs/RELEASE_NOTES_0.4.1.md](docs/RELEASE_NOTES_0.4.1.md).
-Previous release: [docs/RELEASE_NOTES_0.4.0.md](docs/RELEASE_NOTES_0.4.0.md).
+Full notes: [docs/RELEASE_NOTES_0.4.2.md](docs/RELEASE_NOTES_0.4.2.md).
+Previous release: [docs/RELEASE_NOTES_0.4.1.md](docs/RELEASE_NOTES_0.4.1.md).
 
 ## License
 

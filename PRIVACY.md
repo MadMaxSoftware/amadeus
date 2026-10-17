@@ -75,7 +75,7 @@ appropriate versioned release. Earlier consent is never applied retroactively.
 
 Future telemetry may be considered only as a distinct, off-by-default feature
 with itemized consent, local payload preview, revocation, and no loss of
-unrelated functionality when declined. Amadeus 0.4.1 contains no telemetry.
+unrelated functionality when declined. Amadeus 0.4.2 contains no telemetry.
 
 GitHub stars, clones, and release download totals are aggregate repository
 signals only; they are not active-install counts. See `docs/USAGE_STATISTICS.md`

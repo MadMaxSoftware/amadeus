@@ -3,7 +3,7 @@
 - **Product:** Amadeus — Local AI Orchestrator by Mad Max Systems
 - **Alias:** Maestro (same Amadeus behavior and orchestration engine)
 - **Public repository:** `https://github.com/MadMaxSoftware/amadeus`
-- **Package version baseline:** `0.4.1` (`plugins/amadeus/.codex-plugin/plugin.json`)
+- **Package version baseline:** `0.4.2` (`plugins/amadeus/.codex-plugin/plugin.json`)
 
 This charter orients local and contributor development on the **public** marketplace
 repository. It does not change runtime plugin behavior.
