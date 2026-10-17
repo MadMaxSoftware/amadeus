@@ -8,7 +8,7 @@
 param(
   [string]$RepoRoot = "",
   [string]$PluginSource = "",
-  [string]$Version = "0.4.2",
+  [string]$Version = "0.4.3",
   [string]$CodexHome = "",
   [string]$AgentsHome = "",
   [switch]$SimulateOnly

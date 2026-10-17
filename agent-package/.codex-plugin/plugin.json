@@ -1,6 +1,6 @@
 {
   "name": "amadeus",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Amadeus - Local AI Orchestrator. Default coordination in trusted local chats, packaged runtime, and optional consent-based capability discovery.",
   "author": {
     "name": "Mad Max Systems"

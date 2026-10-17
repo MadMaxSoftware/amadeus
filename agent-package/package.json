@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "amadeus",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "host": "codex",
   "assets": [
     ".codex-plugin/plugin.json",

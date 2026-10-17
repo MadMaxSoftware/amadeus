@@ -37,6 +37,10 @@ Claude Code:
 claude plugin update amadeus@amadeus
 ```
 
+Claude desktop app: chats there use a copy synced to your claude.ai account,
+separate from Claude Code's. It updates after claude.ai has synced the new
+version; restart the app to pick it up.
+
 Restart the host afterwards so it reloads the plugin. Amadeus never replaces a
 running plugin. Your goals and other state live outside the plugin folder and
 are kept across upgrades; the state database is backed up daily.

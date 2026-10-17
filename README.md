@@ -194,16 +194,16 @@ Claude Code upgrade command.
 
 ## Current release
 
-Version **0.4.2** routes work economically and applies one set of rules to
-every AI:
-- workers use your chat's own provider and the cheapest tier that fits; the
-  other provider takes over when the first fails or reaches its usage limit;
-- tiers instead of model names, so model updates need no Amadeus update;
-- one shared set of sandbox and safety rules for Codex, Claude and Cursor;
-- Grok as an opt-in preview.
+Version **0.4.3** cuts repeated work and tightens worker environments:
+- a recovery starts from the change verification rejected, and sees why the
+  check failed, instead of redoing the work;
+- projects can declare a build step that Amadeus runs before verification;
+- pausing cancels a step that has not called a model yet, and progress
+  updates in the chat are much smaller;
+- Codex and Cursor workers get an allowlisted environment, like Claude.
 
-Full notes: [docs/RELEASE_NOTES_0.4.2.md](docs/RELEASE_NOTES_0.4.2.md).
-Previous release: [docs/RELEASE_NOTES_0.4.1.md](docs/RELEASE_NOTES_0.4.1.md).
+Full notes: [docs/RELEASE_NOTES_0.4.3.md](docs/RELEASE_NOTES_0.4.3.md).
+Previous release: [docs/RELEASE_NOTES_0.4.2.md](docs/RELEASE_NOTES_0.4.2.md).
 
 ## License
 

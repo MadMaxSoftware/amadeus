@@ -9,7 +9,7 @@
       "name": "amadeus",
       "source": "./claude-plugin",
       "description": "Durable local orchestration using available subscription models",
-      "version": "0.4.2"
+      "version": "0.4.3"
     }
   ]
 }
