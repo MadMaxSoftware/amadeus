@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Coordinator } from '../src/coordinator.ts';
-import { buildEphemeralWorkerGuidance, classifyCodexCommand, parseCodexProgressLine } from '../src/codex-worker-driver.ts';
+import { buildEphemeralWorkerGuidance, classifyCodexCommand, isSearchCommand, parseCodexProgressLine } from '../src/codex-worker-driver.ts';
 import { parseCursorProgressLine } from '../src/cursor-worker-driver.ts';
 import { isolatedWorkerEnvironment } from '../src/codex-adapter.ts';
 import { runWorkerCommand } from '../src/codex-adapter.ts';
@@ -93,6 +93,26 @@ test('sanitizes provider events into concrete owner progress without exposing co
   }), workspace);
   assert.deepEqual(edit.paths, ['src/worker.ts']);
   assert.match(edit.summary, /src\/worker\.ts/);
+});
+
+test('a search that finds nothing is reported as no matches, not as a failure', () => {
+  const workspace = join(tmpdir(), 'amadeus-progress-workspace');
+  const finished = (command, exitCode) => parseCodexProgressLine(JSON.stringify({
+    type: 'item.completed', item: { type: 'command_execution', status: 'failed', command, exit_code: exitCode },
+  }), workspace);
+  for (const command of ['rg -n missingSymbol src', '"C:\pwsh.exe" -Command "rg -n x src"', 'grep -rn x src', 'git grep -n x',
+    'Select-String -Path src/*.ts -Pattern x', 'findstr /s x *.ts']) {
+    assert.ok(isSearchCommand(command), command);
+    const progress = finished(command, 1);
+    assert.equal(progress.status, 'completed', command);
+    assert.equal(progress.summary, 'A repository search found no matches.');
+    assert.equal(progress.important, undefined);
+  }
+  assert.equal(finished('rg -n x src', 2).status, 'failed', 'exit 2 is a real search error');
+  for (const command of ['npm test && rg x', 'git status && git grep x', 'Get-Content missing.txt']) {
+    assert.equal(isSearchCommand(command), false, command);
+  }
+  assert.equal(finished('npm test && rg x', 1).summary, 'The test suite failed (exit 1); the worker is adapting.');
 });
 
 test('Cursor stream activity becomes concrete owner progress instead of generic heartbeats', () => {

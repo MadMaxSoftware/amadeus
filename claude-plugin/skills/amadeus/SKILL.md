@@ -215,6 +215,9 @@ inventory commands. A user instruction not to scan takes precedence.
   `wait_for_work_update` for at most 45 seconds at a time. While that local wait
   runs, Codex's normal activity indicator remains visible without another
   worker-model call.
+- While a worker runs, `wait_for_work_update` returns a compact update
+  (`compact:true`): only the new checkpoints and the current action. That is
+  expected; do not call `work_status` just to see the rest.
 - When `wait_for_work_update` returns a meaningful stage or state change, post a
   short ordinary commentary update in the chat - what just finished, what is
   happening now, and whether the owner needs to act - then wait again with the

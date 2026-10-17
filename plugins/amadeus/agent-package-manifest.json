@@ -7,7 +7,7 @@
     "hooks/hooks.json": "408e4aacf239ad720d0711fe9354bd7b7760b0aa0b7ce32e22e39bd61721d1e7",
     "hooks/session-start.mjs": "1ed59b2765b73d945c43411a35e2fb2f69d0cca9593672049626e90f85c87c65",
     "privacy-flows.json": "4659a424b589112891323acc05aa8f2314fa746ef65014242b7e5ef037989b58",
-    "skills/amadeus/SKILL.md": "7bfcf556105210d20d7817bf8a0eb6bafd9823f87437be03d3df132b4c065647",
+    "skills/amadeus/SKILL.md": "7ed87f54efc34d3862172753bc091ba704879d6d339831bfcddaa0cf2a45d210",
     "skills/amadeus/agents/openai.yaml": "0edc016a21646afbf3c2a1159b430208257855fe836d4c8ee0173fb05fdb34dd",
     "skills/maestro/SKILL.md": "a6fce4e4fbeb62bcf66e3ee986c151467d1277586a4954f43fb24a06e76c90a7",
     "skills/maestro/agents/openai.yaml": "c157c07a61cd0b83313d8767d989b271c0d61cf7035150c58a1f9968bb0edede",

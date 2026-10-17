@@ -24,9 +24,20 @@ export function classifyCodexCommand(command: unknown): string {
   if (/\b(node\s+--test|npm(?:\.cmd)?\s+(?:run\s+)?test|pytest|cargo\s+test)\b/.test(value)) return "the test suite";
   if (/\b(npm(?:\.cmd)?\s+run\s+[^\s]*build|build-plugin-runtime)\b/.test(value)) return "the package build";
   if (/\bgit(?:\.exe)?\s/.test(value)) return "a Git check";
-  if (/\b(rg|select-string|get-childitem|get-content|findstr)(?:\.exe)?\b/.test(value)) return "a repository inspection";
+  if (/\b(rg|e?grep|select-string|sls|get-childitem|get-content|findstr)(?:\.exe)?\b/.test(value)) return "a repository inspection";
   if (/\b(node|pwsh|powershell)(?:\.exe)?\s/.test(value)) return "a local verification command";
   return "a repository command";
+}
+
+/**
+ * Commands whose exit code 1 means "no matches": rg, grep, git grep, findstr, Select-String.
+ * Not when the command also runs tests, a build or another Git command, whose exit 1 is a failure.
+ */
+export function isSearchCommand(command: unknown): boolean {
+  const value = String(command ?? "").toLowerCase();
+  if (!/(?:^|[\s"'(;&|])(?:rg|grep|egrep|findstr|select-string|sls)(?:\.exe)?(?=[\s"')]|$)/.test(value)) return false;
+  const label = classifyCodexCommand(value);
+  return label === "a repository inspection" || (label === "a Git check" && !/\bgit(?:\.exe)?\s+(?!grep\b)[a-z]/.test(value));
 }
 
 /** Convert a provider JSONL event into a privacy-safe owner progress checkpoint. */
@@ -46,6 +57,10 @@ export function parseCodexProgressLine(line: string, workspace: string): CodexPr
   const failed = String(item.status ?? "").toLowerCase() === "failed";
   const status = failed ? "failed" : completed ? "completed" : "started";
   if (item.type === "command_execution") {
+    // Search tools exit 1 when nothing matches: an answer, not a failure.
+    if (failed && item.exit_code === 1 && isSearchCommand(item.command)) {
+      return { phase: "command", status: "completed", summary: "A repository search found no matches." };
+    }
     const label = classifyCodexCommand(item.command);
     const capitalized = `${label[0].toUpperCase()}${label.slice(1)}`;
     const exit = Number.isInteger(item.exit_code) ? ` (exit ${item.exit_code})` : "";

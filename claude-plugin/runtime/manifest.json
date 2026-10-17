@@ -1,5 +1,5 @@
 {
-  "package.json": "d67abce169bf8db2bccab7bcfaa0dc91091b38edc0d34249e6ae8609eacfacc4",
+  "package.json": "2095fc25e76f54ab33ed5694c44f9ae646c6648532ad7f3a6865f1e75c9ae921",
   "src/backup-policy.ts": "93f0b100de7cd2019dff9d84170490f537351cc3460bcf7f2c16503cba248a36",
   "src/claude-adapter.ts": "dbb6b2ce8ff1d93c6b60b6df5eff810f04015b8f4d9d58df73a9a4a8f4277464",
   "src/claude-path-verifier-shim.cjs": "70b6f5dcc7b2a3e32d40c529cc9dcae7bdb6c3cf1009eb0c715043e8e37ab771",
@@ -7,7 +7,7 @@
   "src/claude-windows-userinfo-shim.cjs": "de0c30c6b265c3f7890d92a18105d953d2ad705f27f2ce8c611bc7b7a6ec1e25",
   "src/claude-worker-driver.ts": "92b303e46d2fe0a02154f1a3dae835bc01ca1c68ebe7f7f8dcd7e4e7796d639b",
   "src/codex-adapter.ts": "ea77695750cb1e93b3c0d6bffc215eb5c2cc96b62be792f704a20feda12e36f8",
-  "src/codex-worker-driver.ts": "7eff7f108a33e04ec5554eeb9a1862aaf68da517fd04d64be5490113b4776bf2",
+  "src/codex-worker-driver.ts": "4220c2d3d1ea114dbaaa8894792b9af06a33704d93902d9df05bc6354bddd1e1",
   "src/coordinator-cli.ts": "dd3332cbd7b3aa819c91674582845e76c5676d88fbf7f2684dd9ffde19fc88ea",
   "src/coordinator-schema.ts": "e6dc1ffd1b6053461a73f0655cb37658ac373accbb55dd0ccd7be762b4caf83c",
   "src/coordinator-types.ts": "3313c949610a45d86d2d19a3a3d27b5283d8d4325be895fbf20543042f68ac48",

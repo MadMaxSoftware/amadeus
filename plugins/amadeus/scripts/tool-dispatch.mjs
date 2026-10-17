@@ -59,6 +59,7 @@ import {
 } from "./server-common.mjs";
 import { attemptDeterministicRecoveryForGoal, routedModelForJob, verifyJobReceipt } from "./receipt-recovery.mjs";
 import {
+  describeProgressEvent,
   goalSummary,
   isMeaningfulProgressEvent,
   liveProgressSummary,
@@ -116,10 +117,32 @@ export async function createDefaultGoalPackage(goalId, paths, options = {}) {
   return packagePath;
 }
 
-export async function waitForWorkUpdate(goalId, afterCursor, timeoutSeconds, paths) {
-  const deadline = Date.now() + timeoutSeconds * 1000;
+/** Worker checkpoints that do not change the goal's stage: a wait reports them as a compact delta. */
+const PROGRESS_ONLY_KINDS = new Set(["worker_progress", "route_step_started", "route_step_completed"]);
+/** Progress-only checkpoints are collected for this long before a wait returns them. */
+const PROGRESS_BATCH_MS = 20_000;
+
+/** A small update for the host chat: what moved since the cursor, not the whole goal record. */
+function compactWorkUpdate(snapshot, cursor, events, message) {
+  return {
+    goalId: snapshot.goalId, compact: true, state: snapshot.state, stateLabel: snapshot.stateLabel ?? null,
+    stage: snapshot.stage ?? null, route: snapshot.route ?? null, done: false,
+    currentAction: snapshot.currentAction ?? null, lastProgressAt: snapshot.lastProgressAt ?? null,
+    livenessAt: snapshot.livenessAt ?? null, possiblyStalled: snapshot.possiblyStalled === true, warning: snapshot.warning ?? null,
+    changed: events.length > 0, progressCursor: cursor,
+    progressEvents: events.map((event) => ({ sequence: Number(event.sequence), kind: String(event.kind),
+      at: String(event.created_at ?? ""), summary: describeProgressEvent(event) })),
+    nextAction: "wait_for_work_update", keepOriginatingTurnOpen: true, doNotFinalize: true,
+    message: events.length ? `${message} Only worker checkpoints changed, so this is a compact update; work_status has the full record.` : message,
+  };
+}
+
+export async function waitForWorkUpdate(goalId, afterCursor, timeoutSeconds, paths, options = {}) {
+  const started = Date.now();
+  const deadline = started + timeoutSeconds * 1000;
   let snapshot;
   let cursor = afterCursor;
+  let gathered = [];
   do {
     // An unattended goal paused by a provider usage limit restarts itself once the window resets.
     if (withCoordinator(paths.database, (coordinator) => coordinator.resumeAfterUsageLimit(goalId))) {
@@ -140,6 +163,16 @@ export async function waitForWorkUpdate(goalId, afterCursor, timeoutSeconds, pat
     cursor = result.cursor;
     const originHostHandoff = snapshot.state === "waiting_on_origin_host";
     const terminal = snapshot.done || originHostHandoff || ["stopped_by_problem", "checking_what_happened", "needs_your_decision", "paused"].includes(snapshot.state);
+    const progressOnly = result.events.length > 0 && result.events.every((event) => PROGRESS_ONLY_KINDS.has(String(event.kind)));
+    gathered = progressOnly ? result.events : [];
+    if (progressOnly && !terminal && !options.full) {
+      // Gather a few checkpoints into one update instead of returning on every worker command.
+      if (Date.now() - started < PROGRESS_BATCH_MS && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(750, deadline - Date.now())));
+        continue;
+      }
+      return compactWorkUpdate(snapshot, cursor, result.events, "The worker made progress.");
+    }
     if (result.events.length > 0 || terminal) {
       const audit = terminal ? await completionAudit(goalId, paths) : undefined;
       return { ...snapshot, changed: result.events.length > 0, progressCursor: cursor, progressEvents: result.events,
@@ -153,7 +186,13 @@ export async function waitForWorkUpdate(goalId, afterCursor, timeoutSeconds, pat
   const originHostHandoff = snapshot?.state === "waiting_on_origin_host";
   const stillActive = snapshot?.state === "working" || snapshot?.state === "continuing" || snapshot?.state === "running"
     || snapshot?.state === "waiting_for_usage_reset";
-  return { ...snapshot, changed: false, progressCursor: cursor, progressEvents: [],
+  if (stillActive && !originHostHandoff && !options.full) {
+    if (gathered.length) return compactWorkUpdate(snapshot, cursor, gathered, "The worker made progress.");
+    return compactWorkUpdate(snapshot, cursor, [], snapshot?.possiblyStalled
+      ? `${snapshot.message} Last concrete checkpoint: ${snapshot.currentAction}.`
+      : `No new work checkpoint arrived in this wait. Current action: ${snapshot?.currentAction ?? "continuing the bounded step"}.`);
+  }
+  return { ...snapshot, changed: gathered.length > 0, progressCursor: cursor, progressEvents: gathered,
     liveProgress: liveProgressSummary(snapshot),
     keepOriginatingTurnOpen: stillActive || originHostHandoff,
     nextAction: originHostHandoff ? "execute_origin_host_handoff_and_continue" : stillActive ? "wait_for_work_update" : undefined,
@@ -236,7 +275,7 @@ export async function callTool(name, rawArguments, paths = productionPaths, back
     if (!Number.isInteger(afterCursor) || afterCursor < 0) throw new Error("afterCursor must be a non-negative integer");
     const timeoutSeconds = args.timeoutSeconds === undefined ? 45 : Number(args.timeoutSeconds);
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1) throw new Error("timeoutSeconds must be a positive integer");
-    return waitForWorkUpdate(goalId, afterCursor, Math.min(timeoutSeconds, 45), paths);
+    return waitForWorkUpdate(goalId, afterCursor, Math.min(timeoutSeconds, 45), paths, { full: args.detail === "full" });
   }
   if (name === "delegate_work") {
     validateRoutePin(args);
