@@ -92,3 +92,17 @@ test('a run of failed stop polls still aborts the worker', async (t) => {
   await new Orchestrator(coordinator, worker, checkpoint, applicator, { stopPollIntervalMs: 20 }).runOnce(goalId);
   assert.equal(aborted, true);
 });
+
+test('a patch re-captured after the declared build step is the one applied and recorded', async (t) => {
+  const { coordinator, goalId, checkpoint } = setup(t);
+  const applied = [];
+  const applicator = { async apply(value) { applied.push(value.sha256); } };
+  const rebuilt = { ...patch, sha256: 'b'.repeat(64), changedFiles: 3, changedPaths: ['generated.txt', 'notes.txt'] };
+  const verifier = { async verify() { return { passed: true, projectTestsRan: true, summary: 'ok', evidence: [], patch: rebuilt,
+    checks: [{ tool: 'npm', kind: 'build', command: 'npm run build', exitCode: 0, passed: true }] }; } };
+  const worker = { async run() { return { outcome: 'changed files', providerUsage, patch, goalDecision: continueDecision }; } };
+  const job = await new Orchestrator(coordinator, worker, checkpoint, applicator, { verifier }).runOnce(goalId);
+  assert.equal(job.status, 'completed');
+  assert.deepEqual(applied, ['b'.repeat(64)]);
+  assert.equal(String(coordinator.patchReceipts(String(job.id)).records[0].patch_sha256).toLowerCase(), 'b'.repeat(64));
+});

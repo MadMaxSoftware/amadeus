@@ -65,9 +65,12 @@ export function isDirectWorkspaceIntegrityCheck(check) {
   return /workspace-diff-check/.test(command);
 }
 
-/** "integrity" checks only whitespace and patch shape; "project-tests" exercise the project. */
+/**
+ * "integrity" checks only whitespace and patch shape; "project-tests" exercise the project;
+ * "build" regenerates derived files before the other checks and tests nothing by itself.
+ */
 export function verificationCheckKind(check) {
-  if (check?.kind === "integrity" || check?.kind === "project-tests") return check.kind;
+  if (check?.kind === "integrity" || check?.kind === "project-tests" || check?.kind === "build") return check.kind;
   return isDirectWorkspaceIntegrityCheck(check) ? "integrity" : "project-tests";
 }
 
@@ -96,13 +99,22 @@ function policyArgument(value) {
  * patch cannot weaken its own verification. A configured check that fails or
  * cannot run blocks the patch, like a `coordinator.verify` npm script.
  */
-export function readVerifyPolicy(policyRoot) {
+function loadVerifyPolicy(policyRoot) {
   const file = join(policyRoot, ...VERIFY_POLICY_PATH.split("/"));
-  if (!existsSync(file)) return [];
+  if (!existsSync(file)) return null;
   const policy = JSON.parse(readFileSync(file, "utf8"));
   if (policy?.schemaVersion !== 1 || !Array.isArray(policy.checks) || policy.checks.length > 10) {
     throw new Error(`${VERIFY_POLICY_PATH} must have schemaVersion 1 and at most 10 checks`);
   }
+  if (policy.build !== undefined && (typeof policy.build !== "string" || !/^[a-zA-Z0-9:_-]{1,100}$/.test(policy.build))) {
+    throw new Error(`${VERIFY_POLICY_PATH} build must be the name of an npm script`);
+  }
+  return policy;
+}
+
+export function readVerifyPolicy(policyRoot) {
+  const policy = loadVerifyPolicy(policyRoot);
+  if (!policy) return [];
   return policy.checks.map((entry) => {
     const runner = POLICY_RUNNERS[typeof entry === "string" ? entry : entry?.runner];
     if (!runner) throw new Error(`Unsupported runner in ${VERIFY_POLICY_PATH}: use pytest, go or dotnet`);
@@ -228,24 +240,48 @@ export function discoverVerificationChecks(workspace, changedPaths = [], options
     if (!/^[a-zA-Z0-9:_-]+$/.test(name) || typeof scripts[name] !== "string") {
       throw new Error(`Invalid coordinator verification script: ${name}`);
     }
-    const scriptBody = scripts[name];
-    const pipeMatch = /Get-Content\s+-Raw\s+(?:-LiteralPath\s+)?["']?([^\s"']+?\.mjs)["']?\s*\|\s*node\s+--input-type=module/i.exec(scriptBody)
-      || /Get-Content\s+-Raw\s+(?:-LiteralPath\s+)?["']?([^\s"']+?\.mjs)["']?\s*\|\s*&?\s*node\s+--input-type=module/i.exec(scriptBody)
-      || /\btype\s+([^\s|()]+\.mjs)\s*\|\s*node\s+--input-type=module/i.exec(scriptBody);
-    if (pipeMatch && existsSync(join(workspace, ...pipeMatch[1].replaceAll("\\", "/").split("/")))) {
-      const runner = pipeMatch[1].replaceAll("\\", "/");
+    const check = npmScriptCheck(workspace, name, scripts[name]);
+    const runner = /powershell pipe\s+(.+)$/i.exec(check.command)?.[1];
+    if (runner) {
       if (seenPipeRunners.has(runner)) continue;
       seenPipeRunners.add(runner);
-      checks.push(buildSandboxPipeCheck(runner, process.execPath, workspace));
-      continue;
     }
-    checks.push({
-      tool: "npm",
-      command: `npm run ${name}`,
-      executable: process.execPath,
-      args: [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "run", name],
-    });
+    checks.push(check);
   }
   checks.push(...readVerifyPolicy(options.policyRoot ?? workspace));
   return checks.map((check) => ({ ...check, kind: verificationCheckKind(check) }));
+}
+
+/** A package.json script as a check: piped `.mjs` runners avoid Node's main-module realpath in the sandbox. */
+function npmScriptCheck(workspace, name, scriptBody) {
+  const pipeMatch = /Get-Content\s+-Raw\s+(?:-LiteralPath\s+)?["']?([^\s"']+?\.mjs)["']?\s*\|\s*node\s+--input-type=module/i.exec(scriptBody)
+    || /Get-Content\s+-Raw\s+(?:-LiteralPath\s+)?["']?([^\s"']+?\.mjs)["']?\s*\|\s*&?\s*node\s+--input-type=module/i.exec(scriptBody)
+    || /\btype\s+([^\s|()]+\.mjs)\s*\|\s*node\s+--input-type=module/i.exec(scriptBody);
+  if (pipeMatch && existsSync(join(workspace, ...pipeMatch[1].replaceAll("\\", "/").split("/")))) {
+    return buildSandboxPipeCheck(pipeMatch[1].replaceAll("\\", "/"), process.execPath, workspace);
+  }
+  return {
+    tool: "npm",
+    command: `npm run ${name}`,
+    executable: process.execPath,
+    args: [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "run", name],
+  };
+}
+
+/**
+ * The project's declared build step (`"build"` in .amadeus/verify.json), run by the
+ * coordinator before the other checks so generated copies match the changed sources
+ * without the worker having to run it. The script name and its body both come from
+ * the authoritative project, so a patch cannot change what the build step runs.
+ * @returns {null | { tool: string, kind: "build", command: string, executable: string, args: string[] }}
+ */
+export function readBuildStep(policyRoot, workspace) {
+  const policy = loadVerifyPolicy(policyRoot);
+  if (!policy?.build) return null;
+  const packagePath = join(policyRoot, "package.json");
+  const scripts = existsSync(packagePath) ? JSON.parse(readFileSync(packagePath, "utf8"))?.scripts ?? {} : {};
+  if (typeof scripts[policy.build] !== "string") {
+    throw new Error(`${VERIFY_POLICY_PATH} build names "${policy.build}", which is not a script in package.json`);
+  }
+  return { ...npmScriptCheck(workspace, policy.build, scripts[policy.build]), kind: "build" };
 }

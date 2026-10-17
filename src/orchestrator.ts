@@ -78,7 +78,9 @@ export type VerificationReceipt = {
   projectTestsRan?: boolean;
   summary: string;
   evidence: string[];
-  checks: Array<{ tool: string; kind?: "integrity" | "project-tests"; command: string; exitCode: number | null; passed: boolean }>;
+  checks: Array<{ tool: string; kind?: "integrity" | "project-tests" | "build"; command: string; exitCode: number | null; passed: boolean }>;
+  /** Re-captured after the project's declared build step; applied instead of the worker's own patch. */
+  patch?: PatchArtifact;
 };
 
 export interface VerificationDriver {
@@ -355,8 +357,11 @@ export class Orchestrator {
             schemaVersion: 1, step: "verify", provider: "software", model: null,
             financialBasis: "no-model", passed: receipt.passed, projectTestsRan: receipt.projectTestsRan ?? null, summary: receipt.summary,
             evidence: receipt.evidence, checks: receipt.checks,
+            ...(receipt.patch ? { rebuiltPatch: { sha256: receipt.patch.sha256.toUpperCase(), changedFiles: receipt.patch.changedFiles } } : {}),
           }));
           verificationStepRecorded = true;
+          // The declared build step regenerated derived files; apply them with the sources.
+          if (receipt.passed && receipt.patch) result.patch = receipt.patch;
           if (!receipt.passed) {
             const detail = `Independent ordinary-software verification failed before apply: ${receipt.summary}`;
             if (claimed.goal_id) {

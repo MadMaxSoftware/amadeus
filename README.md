@@ -99,6 +99,18 @@ without calling a model:
   from your project, not from the worker's copy, so a change cannot weaken its
   own checks.
 
+- **Build step:** if your project generates files from its sources (a bundle,
+  a packaged copy), name the npm script that regenerates them:
+
+  ```json
+  { "schemaVersion": 1, "build": "build", "checks": [] }
+  ```
+
+  Amadeus runs it in the worker sandbox before the other checks and applies
+  the regenerated files together with the worker's change, so workers never
+  need to run it themselves. The script must exist in your project's
+  `package.json`; a worker's copy cannot change it.
+
 A configured check that fails blocks the change.
 
 ## Providers and local AI

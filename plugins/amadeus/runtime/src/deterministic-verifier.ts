@@ -10,10 +10,12 @@ import {
   changedLanguages,
   discoverVerificationChecks,
   isDirectWorkspaceIntegrityCheck,
+  readBuildStep,
   resolveSandboxTestRunner,
   verificationToolEnvironment,
   VERIFY_POLICY_PATH,
 } from "./verification-checks.mjs";
+import { captureWorkerPatch } from "./worker-patch.ts";
 
 export {
   buildSandboxPipeCheck,
@@ -70,9 +72,11 @@ export class DeterministicVerifier implements VerificationDriver {
     const evidencePath = join(this.options.artifactRoot, `${context.jobId}-a${context.attempt}.verification.json`);
     const outcomes: VerificationReceipt["checks"] = [];
     const raw: Array<Record<string, unknown>> = [];
+    let patch = result.patch;
     try {
-      // Opt-in test commands come from the authoritative project, not the patched copy.
-      for (const check of discoverVerificationChecks(workspace, result.patch?.changedPaths, { policyRoot: this.options.projectRoot })) {
+      // The declared build step and opt-in test commands come from the authoritative project, not the patched copy.
+      const buildStep = readBuildStep(this.options.projectRoot, workspace);
+      const runCheck = async (check: ReturnType<typeof discoverVerificationChecks>[number]): Promise<boolean> => {
         context.signal.throwIfAborted();
         context.heartbeat();
         // Strip host Cursor NODE_OPTIONS (--require path-verifier under C:\) so
@@ -94,17 +98,33 @@ export class DeterministicVerifier implements VerificationDriver {
         const passed = execution.exitCode === 0 && !execution.timedOut && !execution.signal && !execution.error;
         outcomes.push({ tool: check.tool, kind: check.kind, command: check.command, exitCode: execution.exitCode, passed });
         raw.push({ ...check, ...execution });
-        if (!passed) break;
+        return passed;
+      };
+      let buildPassed = true;
+      if (buildStep) {
+        buildPassed = await runCheck(buildStep);
+        // Re-capture so the applied patch carries the regenerated files with the sources.
+        if (buildPassed) {
+          patch = captureWorkerPatch(workspace, config.writableWorkspacePaths ?? [], this.options.artifactRoot,
+            `${context.jobId}-a${context.attempt}-built`) ?? patch;
+        }
       }
-      const passed = outcomes.length > 0 && outcomes.every((check) => check.passed);
+      if (buildPassed) {
+        for (const check of discoverVerificationChecks(workspace, patch?.changedPaths, { policyRoot: this.options.projectRoot })) {
+          if (!await runCheck(check)) break;
+        }
+      }
+      const passed = outcomes.some((check) => check.kind !== "build") && outcomes.every((check) => check.passed);
       const projectTestsRan = outcomes.some((check) => check.kind === "project-tests");
       const summary = !passed
         ? `${outcomes.find((check) => !check.passed)?.command ?? "Verification"} failed; the patch was not applied.`
         : projectTestsRan
           ? `${outcomes.length} independent ordinary-software check${outcomes.length === 1 ? "" : "s"} passed, including project tests.`
-          : integrityOnlySummary(result.patch?.changedPaths);
-      writeFileSync(evidencePath, JSON.stringify({ schemaVersion: 1, modelInvoked: false, passed, projectTestsRan, summary, checks: outcomes, executions: raw }, null, 2));
-      return { passed, projectTestsRan, summary, evidence: [evidencePath], checks: outcomes };
+          : integrityOnlySummary(patch?.changedPaths);
+      const rebuilt = patch !== result.patch ? patch : undefined;
+      writeFileSync(evidencePath, JSON.stringify({ schemaVersion: 1, modelInvoked: false, passed, projectTestsRan, summary, checks: outcomes,
+        rebuiltPatch: rebuilt ? { path: rebuilt.path, sha256: rebuilt.sha256, changedFiles: rebuilt.changedFiles } : null, executions: raw }, null, 2));
+      return { passed, projectTestsRan, summary, evidence: [evidencePath], checks: outcomes, ...(rebuilt ? { patch: rebuilt } : {}) };
     } finally {
       rmSync(runtimeHome, { recursive: true, force: true });
     }

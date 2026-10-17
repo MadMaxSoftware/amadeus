@@ -77,11 +77,19 @@ try {
   };
   mkdirSync(join(fixture, '.tmp'), { recursive: true });
 
-  for (const args of [
-    ['scripts/build-agent-package.mjs', ...(process.env.AMADEUS_PACKAGE_BUILD === '1' ? [] : ['--check'])],
-    ['scripts/build-plugin-runtime.mjs', ...(process.env.AMADEUS_PACKAGE_BUILD === '1' ? [] : ['--check'])],
+  const build = process.env.AMADEUS_PACKAGE_BUILD === '1';
+  // Build mode regenerates every packaged copy and copies it back; check mode verifies them and runs the package tests.
+  const steps = build ? [
+    ['scripts/build-agent-package.mjs'],
+    ['scripts/build-plugin-runtime.mjs'],
+    ['scripts/build-claude-package.mjs', '--publish'],
+  ] : [
+    ['scripts/build-agent-package.mjs', '--check'],
+    ['scripts/build-plugin-runtime.mjs', '--check'],
+    ['scripts/build-claude-package.mjs', '--check-published'],
     ['--test', 'test/amadeus-release.test.mjs', 'test/agent-package.test.mjs', 'test/claude-static-parity.test.mjs', 'test/claude-package.test.mjs'],
-  ]) {
+  ];
+  for (const args of steps) {
     // Prefer -e dynamic import so argv paths never go through Node's main-module realpath.
     const absolute = args[0].startsWith('--')
       ? null
@@ -111,11 +119,18 @@ try {
       process.exitCode = result.status ?? 1;
       break;
     }
-    if (process.env.AMADEUS_PACKAGE_BUILD === '1' && args[0] === 'scripts/build-agent-package.mjs') {
+    if (build && args[0] === 'scripts/build-agent-package.mjs') {
       cpSync(join(fixture, 'plugins', 'amadeus'), join(source, 'plugins', 'amadeus'), { recursive: true });
     }
-    if (process.env.AMADEUS_PACKAGE_BUILD === '1' && args[0] === 'scripts/build-plugin-runtime.mjs') {
+    if (build && args[0] === 'scripts/build-plugin-runtime.mjs') {
+      // The runtime copy is fully generated: replace it so files removed from src/ disappear too.
+      rmSync(join(source, 'plugins', 'amadeus', 'runtime'), { recursive: true, force: true });
       cpSync(join(fixture, 'plugins', 'amadeus', 'runtime'), join(source, 'plugins', 'amadeus', 'runtime'), { recursive: true });
+    }
+    if (build && args[0] === 'scripts/build-claude-package.mjs') {
+      rmSync(join(source, 'claude-plugin'), { recursive: true, force: true });
+      cpSync(join(fixture, 'claude-plugin'), join(source, 'claude-plugin'), { recursive: true });
+      cpSync(join(fixture, '.claude-plugin', 'marketplace.json'), join(source, '.claude-plugin', 'marketplace.json'));
     }
   }
 } finally {

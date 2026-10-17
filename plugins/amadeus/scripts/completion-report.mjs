@@ -49,14 +49,14 @@ export function recordedHostVerificationCommands(events) {
 
 /**
  * Whether any recorded check exercised the project, or only patch integrity.
- * Older records carry no `kind`; their integrity checks are recognised by command.
+ * Integrity and build steps test nothing. Older records carry no `kind`; their integrity checks are recognised by command.
  */
 export function verificationDepth(recordedChecks, hostCommands = []) {
-  const isIntegrity = (check) => check.kind ? check.kind === "integrity"
+  const notATest = (check) => check.kind ? check.kind !== "project-tests"
     : check.command === "git diff --check" || /workspace-diff-check/.test(String(check.command));
   const all = [...recordedChecks, ...hostCommands.map((command) => ({ command }))];
   const commands = [...new Set(all.map((check) => check.command))];
-  const functional = all.filter((check) => !isIntegrity(check));
+  const functional = all.filter((check) => !notATest(check));
   if (!all.length) return { status: "not_exercised", summary: "No independent verification result was recorded.", commands };
   return functional.length
     ? { status: "pass", summary: "Independent product checks ran in addition to patch-integrity checking.", commands }
