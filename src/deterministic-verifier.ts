@@ -31,6 +31,18 @@ export function integrityOnlySummary(changedPaths: string[] = []): string {
     + (languages.length ? ` Changed ${languages.join(", ")} code was not tested. Declare test commands in ${VERIFY_POLICY_PATH} (Python, Go, .NET) or package.json coordinator.verify (npm).` : "");
 }
 
+/** The last lines a failed check printed, so a recovery worker can see why it failed. */
+export function failureOutputTail(execution: { stdout?: string; stderr?: string; error?: string; timedOut?: boolean;
+  timeoutKind?: string; signal?: string | null }, maximumLines = 40, maximumCharacters = 3000): string {
+  const lines = [execution.stdout, execution.stderr].map((text) => String(text ?? "").replace(/\x1b\[[0-9;]*m/g, "").trimEnd())
+    .filter(Boolean).join("\n").split(/\r?\n/).filter((line) => line.trim());
+  if (execution.timedOut) lines.push(`(stopped after the ${execution.timeoutKind ?? "time"} limit)`);
+  else if (execution.signal) lines.push(`(ended by signal ${execution.signal})`);
+  if (execution.error) lines.push(`(${execution.error})`);
+  const tail = lines.slice(-maximumLines).join("\n");
+  return tail.length > maximumCharacters ? `…${tail.slice(-maximumCharacters)}` : tail;
+}
+
 export class DeterministicVerifier implements VerificationDriver {
   private readonly options: { config: string; artifactRoot: string; runtimeHomeRoot: string; projectRoot: string;
     maximumRuntimeSeconds?: number; maximumIdleSeconds?: number };
@@ -96,7 +108,8 @@ export class DeterministicVerifier implements VerificationDriver {
         const execution = await this.execute(directIntegrity ? check.executable : "codex", sandboxedArgs,
           workspace, timeoutSec, context.signal, environment, idleSec);
         const passed = execution.exitCode === 0 && !execution.timedOut && !execution.signal && !execution.error;
-        outcomes.push({ tool: check.tool, kind: check.kind, command: check.command, exitCode: execution.exitCode, passed });
+        outcomes.push({ tool: check.tool, kind: check.kind, command: check.command, exitCode: execution.exitCode, passed,
+          ...(passed ? {} : { outputTail: failureOutputTail(execution) }) });
         raw.push({ ...check, ...execution });
         return passed;
       };

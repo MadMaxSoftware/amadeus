@@ -50,6 +50,28 @@ function git(cwd: string, args: string[]): string {
   }).trim();
 }
 
+/** Where the host records a recovery seed: inside .git, which workers can never write. */
+export const SEED_RECORD = "amadeus-seed.json";
+
+/** Hash of the workspace's working changes, computed exactly as patch capture writes them. */
+export function workingDiffSha256(workspace: string): string {
+  const diff = execFileSync("git", ["-c", `safe.directory=${workspace}`, "-C", workspace, "diff", "HEAD", "--binary", "--no-ext-diff", "--no-renames"], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 128 * 1024 * 1024,
+  });
+  return createHash("sha256").update(diff).digest("hex").toUpperCase();
+}
+
+/** A fresh recovery workspace may hold exactly the seeded patch the host applied, and nothing else. */
+function holdsOnlyRecordedSeed(workspace: string): boolean {
+  const record = join(workspace, ".git", SEED_RECORD);
+  if (!existsSync(record)) return false;
+  try {
+    const expected = String(JSON.parse(readFileSync(record, "utf8")).sha256 ?? "").toUpperCase();
+    return /^[0-9A-F]{64}$/.test(expected) && workingDiffSha256(workspace) === expected
+      && !git(workspace, ["ls-files", "--others", "--exclude-standard"]);
+  } catch { return false; }
+}
+
 function normalizeManifestPath(input: string): string {
   const value = input.replaceAll("\\", "/");
   if (!value || value.startsWith("/") || /^[A-Za-z]:/.test(value)) {
@@ -246,6 +268,8 @@ export function verifyWorkspace(workspaceInput: string, options: { allowWorkingC
     if (!expected.has(path)) throw new Error(`Unexpected path reachable through Git history: ${path}`);
   }
   if (new Set(reachable).size !== expected.size) throw new Error("Git history does not match isolation receipt");
-  if (!options.allowWorkingChanges && git(workspace, ["status", "--porcelain=v1"])) throw new Error("Worker repository is not clean");
+  if (!options.allowWorkingChanges && git(workspace, ["status", "--porcelain=v1"]) && !holdsOnlyRecordedSeed(workspace)) {
+    throw new Error("Worker repository is not clean");
+  }
   return receipt;
 }

@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import type { PatchArtifact } from "./orchestrator.ts";
 import { excludedDevelopmentPath } from "./development-project.ts";
+import { SEED_RECORD, workingDiffSha256 } from "./worker-isolation.ts";
 
 type TextLine = { text: string; eol: string };
 
@@ -120,4 +121,31 @@ export function captureWorkerPatch(workspace: string, allowedPaths: string[], ar
   return { path, sha256: createHash("sha256").update(patch).digest("hex").toUpperCase(), bytes: Buffer.byteLength(patch),
     changedFiles: numstat.length, changedLines, semanticChangedLines, lineEndingOnlyLines,
     changedPaths: [...new Set([...tracked, ...untracked])].sort() };
+}
+
+/**
+ * Start a recovery workspace from the previous attempt's rejected patch, so the recovery
+ * worker repairs it instead of redoing it. The patch must match its recorded hash, apply
+ * cleanly to the fresh copy and reproduce itself exactly; otherwise the workspace stays a
+ * fresh copy. Returns guidance for the worker either way.
+ */
+export function seedWorkspaceWithPatch(workspace: string, seed: { path: string; sha256: string }): { seeded: boolean; guidance: string } {
+  const fresh = { seeded: false, guidance: "\n\nRecovery note: the previous attempt's change could not be applied to this workspace, so it is a fresh copy of the project. Redo that change first, then correct the failure." };
+  if (!existsSync(seed.path)) return fresh;
+  const patch = readFileSync(seed.path, "utf8");
+  if (createHash("sha256").update(patch).digest("hex").toUpperCase() !== seed.sha256.toUpperCase()) return fresh;
+  try {
+    // Write the patch bytes as captured, whatever the machine's line-ending conversion settings.
+    runGit(workspace, ["-c", "core.autocrlf=false", "apply", "--whitespace=nowarn", "--binary", "-"], patch);
+    const untracked = runGit(workspace, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean)
+      .filter((path) => !excludedDevelopmentPath(path));
+    for (const path of untracked) runGit(workspace, ["add", "--intent-to-add", "--", path]);
+    if (workingDiffSha256(workspace) !== seed.sha256.toUpperCase()) throw new Error("seeded workspace does not reproduce the patch");
+    writeFileSync(join(workspace, ".git", SEED_RECORD), JSON.stringify({ schemaVersion: 1, sha256: seed.sha256.toUpperCase() }));
+    return { seeded: true, guidance: "\n\nRecovery note: this workspace already contains the previous attempt's change (it was rejected by verification, not lost). Build on it: do not redo it." };
+  } catch {
+    runGit(workspace, ["reset", "-q", "--hard", "HEAD"]);
+    runGit(workspace, ["clean", "-q", "-f", "-d"]);
+    return fresh;
+  }
 }

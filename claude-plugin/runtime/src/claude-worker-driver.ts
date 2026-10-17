@@ -10,7 +10,7 @@ import {
 import { DefiniteWorkerFailure, UntrustedWorkerReceiptError, type WorkerContext, type WorkerDriver, type WorkerResult } from "./orchestrator.ts";
 import { materializeWorkspace, materializeWritableWorkspacePaths } from "./worker-isolation.ts";
 import { parseGoalDecision } from "./goal-protocol.ts";
-import { captureWorkerPatch } from "./worker-patch.ts";
+import { captureWorkerPatch, seedWorkspaceWithPatch } from "./worker-patch.ts";
 import { prepareWorkspaceIsolationAcceptance } from "./workspace-isolation-acceptance.ts";
 import { prepareWorkspaceRuntimeRoot, WORKER_RUNTIME_DIRECTORY } from "./worker-runtime-layout.ts";
 import { portableClaudeConfig } from "./portable-runtime.ts";
@@ -176,6 +176,7 @@ export class ClaudeWorkerDriver implements WorkerDriver {
     };
     persistEvidence({ stdout: "", stderr: "", captureWorkspace: true });
     materializeWritableWorkspacePaths(workspace, config.writableWorkspacePaths ?? []);
+    const seed = context.seedPatch ? seedWorkspaceWithPatch(workspace, context.seedPatch) : null;
     config = this.prepareAcceptance({ adapter: "claude", config, workspace,
       artifactRoot: this.paths.artifactRoot, workspaceId }) as ClaudeAdapterConfig;
     assertClaudeImplementationDispatchAllowed(config, workspace);
@@ -196,7 +197,7 @@ export class ClaudeWorkerDriver implements WorkerDriver {
       const runWith = (runConfig: ClaudeAdapterConfig) => this.runImplementation(
         runConfig,
         workspace,
-        this.paths.objectiveOverride?.trim() || context.objective,
+        (this.paths.objectiveOverride?.trim() || context.objective) + (seed?.guidance ?? ""),
         jobConfigDirectory,
         AbortSignal.any([context.signal, leaseAbort.signal]),
         {

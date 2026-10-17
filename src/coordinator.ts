@@ -403,6 +403,23 @@ export class Coordinator {
     catch { return null; }
   }
 
+  /**
+   * The unapplied patch a recovery iteration starts from: the previous iteration's, when
+   * independent verification rejected it. Null when that iteration ended any other way.
+   */
+  recoverySeedPatch(goalId: string, beforeIteration: number): { path: string; sha256: string } | null {
+    const job = this.db.prepare("SELECT id FROM jobs WHERE goal_id=? AND goal_iteration<? ORDER BY goal_iteration DESC LIMIT 1")
+      .get(goalId, beforeIteration) as { id: string } | undefined;
+    if (!job) return null;
+    const row = this.db.prepare("SELECT detail FROM events WHERE job_id=? AND kind='verification_recovery_required' ORDER BY sequence DESC LIMIT 1")
+      .get(job.id) as { detail: string } | undefined;
+    if (!row) return null;
+    try {
+      const patch = JSON.parse(String(JSON.parse(row.detail).detail)).patch;
+      return typeof patch?.path === "string" && /^[0-9A-Fa-f]{64}$/.test(String(patch?.sha256)) ? { path: patch.path, sha256: patch.sha256 } : null;
+    } catch { return null; }
+  }
+
   pauseGoal(id: string): Record<string, unknown> {
     const goal = this.getGoal(id);
     if (goal.status !== "active") throw new Error("only an active goal can be paused");

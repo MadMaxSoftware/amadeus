@@ -10,7 +10,7 @@ import {
 import { DefiniteWorkerFailure, UntrustedWorkerReceiptError, type WorkerContext, type WorkerDriver, type WorkerResult } from "./orchestrator.ts";
 import { materializeWorkspace, materializeWritableWorkspacePaths } from "./worker-isolation.ts";
 import { extractLeadingJsonObject, parseGoalDecision, type GoalDecision } from "./goal-protocol.ts";
-import { captureWorkerPatch } from "./worker-patch.ts";
+import { captureWorkerPatch, seedWorkspaceWithPatch } from "./worker-patch.ts";
 import { prepareWorkspaceIsolationAcceptance } from "./workspace-isolation-acceptance.ts";
 import { prepareWorkspaceRuntimeRoot, WORKER_RUNTIME_DIRECTORY } from "./worker-runtime-layout.ts";
 
@@ -179,6 +179,7 @@ export class CursorWorkerDriver implements WorkerDriver {
     };
     persistEvidence({ stdout: "", stderr: "", captureWorkspace: true });
     materializeWritableWorkspacePaths(workspace, config.writableWorkspacePaths ?? []);
+    const seed = context.seedPatch ? seedWorkspaceWithPatch(workspace, context.seedPatch) : null;
     config = this.prepareAcceptance({ adapter: "cursor", config, workspace,
       artifactRoot: this.paths.artifactRoot, workspaceId });
     const leaseAbort = new AbortController();
@@ -193,7 +194,7 @@ export class CursorWorkerDriver implements WorkerDriver {
       const result = await this.runImplementation(
         config,
         workspace,
-        this.paths.objectiveOverride?.trim() || context.objective,
+        (this.paths.objectiveOverride?.trim() || context.objective) + (seed?.guidance ?? ""),
         jobConfigDirectory,
         AbortSignal.any([context.signal, leaseAbort.signal]),
         { onEvidence: (evidence) => {

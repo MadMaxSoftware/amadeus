@@ -51,6 +51,8 @@ export type WorkerContext = {
   heartbeat: () => void;
   /** Sanitized product-work checkpoint; never a raw provider transcript. */
   progress?: (detail: WorkerProgress) => void;
+  /** The previous iteration's patch that verification rejected; the recovery workspace starts with it applied. */
+  seedPatch?: { path: string; sha256: string };
 };
 
 export type WorkerProgress = {
@@ -78,7 +80,9 @@ export type VerificationReceipt = {
   projectTestsRan?: boolean;
   summary: string;
   evidence: string[];
-  checks: Array<{ tool: string; kind?: "integrity" | "project-tests" | "build"; command: string; exitCode: number | null; passed: boolean }>;
+  checks: Array<{ tool: string; kind?: "integrity" | "project-tests" | "build"; command: string; exitCode: number | null; passed: boolean;
+    /** Last output lines of a failed check. */
+    outputTail?: string }>;
   /** Re-captured after the project's declared build step; applied instead of the worker's own patch. */
   patch?: PatchArtifact;
 };
@@ -204,13 +208,17 @@ export class Orchestrator {
           summary: `Implementation started with ${this.options.routeStep.provider}${this.options.routeStep.model ? ` (${this.options.routeStep.model})` : ""}.`,
         }));
       }
+      const goalIteration = claimed.goal_iteration === null || claimed.goal_iteration === undefined ? null : Number(claimed.goal_iteration);
+      // A recovery after failed verification starts from the rejected change instead of redoing it.
+      const seedPatch = claimed.goal_id && goalIteration ? this.coordinator.recoverySeedPatch(String(claimed.goal_id), goalIteration) : null;
       const result = await this.worker.run({
         jobId,
         attempt,
         objective: String(claimed.objective),
         reservedCredits: Number(claimed.reserved_credit_micros) / 1_000_000,
         goalId: claimed.goal_id ? String(claimed.goal_id) : null,
-        goalIteration: claimed.goal_iteration === null || claimed.goal_iteration === undefined ? null : Number(claimed.goal_iteration),
+        goalIteration,
+        ...(seedPatch ? { seedPatch } : {}),
         signal: controller.signal,
         heartbeat: () => { this.coordinator.heartbeat(jobId, workerName, leaseSeconds); },
         progress: (detail) => {
@@ -364,6 +372,7 @@ export class Orchestrator {
           if (receipt.passed && receipt.patch) result.patch = receipt.patch;
           if (!receipt.passed) {
             const detail = `Independent ordinary-software verification failed before apply: ${receipt.summary}`;
+            const failedOutput = receipt.checks.find((check) => !check.passed)?.outputTail?.trim();
             if (claimed.goal_id) {
               const decision: GoalDecision = {
                 status: "blocked",
@@ -372,8 +381,8 @@ export class Orchestrator {
                 nextObjective: null,
                 question: null,
                 recovery: {
-                  diagnosis: receipt.summary,
-                  nextObjective: "Correct the verified local failure in the preserved workspace, perform post-drift housekeeping for any redundant artifacts exposed by the correction, rerun the failed check and focused tests, then resume the original milestone without repeating the failed operation unchanged.",
+                  diagnosis: failedOutput ? `${receipt.summary}\nLast output of the failed check:\n${failedOutput}` : receipt.summary,
+                  nextObjective: "Your workspace starts with the rejected change already applied: do not redo it. Correct the verified failure, perform post-drift housekeeping for any redundant artifacts exposed by the correction, rerun the failed check and focused tests, then resume the original milestone without repeating the failed operation unchanged.",
                   scope: "same-approved-scope",
                 },
               };
@@ -382,6 +391,8 @@ export class Orchestrator {
                 summary: receipt.summary,
                 evidence: receipt.evidence,
                 checks: receipt.checks,
+                // The recovery iteration's workspace is seeded with this patch.
+                patch: { path: result.patch.path, sha256: result.patch.sha256.toUpperCase() },
                 authoritativeWorkspaceModified: false,
               }));
               this.coordinator.finishGoalIteration(jobId, detail, result.resultArtifactPath, decision);

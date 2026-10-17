@@ -7,7 +7,7 @@ import { DefiniteWorkerFailure, UntrustedWorkerReceiptError, type WorkerContext,
 import { materializeWorkspace, materializeWritableWorkspacePaths } from "./worker-isolation.ts";
 import { parseCodexUsage } from "./usage-accounting.ts";
 import { parseGoalDecision } from "./goal-protocol.ts";
-import { captureWorkerPatch } from "./worker-patch.ts";
+import { captureWorkerPatch, seedWorkspaceWithPatch } from "./worker-patch.ts";
 import { prepareWorkspaceIsolationAcceptance } from "./workspace-isolation-acceptance.ts";
 import { portableWorkerConfig } from './portable-runtime.ts';
 
@@ -153,6 +153,7 @@ export class CodexWorkerDriver implements WorkerDriver {
       workspaceId,
     });
     materializeWritableWorkspacePaths(workspace, config.writableWorkspacePaths ?? []);
+    const seed = context.seedPatch ? seedWorkspaceWithPatch(workspace, context.seedPatch) : null;
     mkdirSync(this.paths.artifactRoot, { recursive: true });
     config = prepareWorkspaceIsolationAcceptance({ adapter: "codex", config, workspace,
       artifactRoot: this.paths.artifactRoot, workspaceId });
@@ -169,10 +170,12 @@ export class CodexWorkerDriver implements WorkerDriver {
         ? '\n\nOrdinary development recovery: fix recoverable technical problems and run relevant checks within this same scope before stopping. If a repair requires another bounded step, return continue with the repair-and-verification objective. A technical blocked result may include recovery: {"diagnosis":"observed cause","nextObjective":"in-scope repair, tests, and resumption of the original goal","scope":"same-approved-scope"}. Do not repeat an unchanged failed operation, override an explicit attempt/spending limit, or mistake a repair for completion of the original goal. Use needs_approval for genuine authority/product decisions; omit recovery for uncertainty or faults you cannot resolve.'
         : "";
       const ephemeralWorkerGuidance = buildEphemeralWorkerGuidance(workspace);
-      context.progress?.({ phase: "preparing", status: "completed", summary: "Prepared the isolated project workspace and verified its execution boundary." });
+      context.progress?.({ phase: "preparing", status: "completed", summary: seed?.seeded
+        ? "Prepared the isolated project workspace from the previous attempt's change and verified its execution boundary."
+        : "Prepared the isolated project workspace and verified its execution boundary." });
       let lastProgressAt = 0;
       let lastProgressSignature = "";
-      const result = await runCodexAsync(config, workspace, objective + recoveryGuidance + ephemeralWorkerGuidance, reservation,
+      const result = await runCodexAsync(config, workspace, objective + (seed?.guidance ?? "") + recoveryGuidance + ephemeralWorkerGuidance, reservation,
         AbortSignal.any([context.signal, leaseAbort.signal]), (line) => {
           let protocolComplete = false;
           try { protocolComplete = JSON.parse(line)?.type === "turn.completed"; } catch { /* Non-JSON diagnostics are ignored. */ }
