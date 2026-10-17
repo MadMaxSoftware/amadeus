@@ -133,7 +133,7 @@ export function toolDefinitions() {
         }
       }
     },
-    { name: "pause_goal", description: "Drain-pause an active goal. A running bounded iteration may finish, but no successor is dispatched.", inputSchema: { type: "object", additionalProperties: false, required: ["goalId"], properties: { goalId } } },
+    { name: "pause_goal", description: "Pause an active goal. An iteration that has not called a model yet is cancelled and requeued; one already working may finish. No successor is dispatched until resume_goal.", inputSchema: { type: "object", additionalProperties: false, required: ["goalId"], properties: { goalId } } },
     { name: "resume_goal", description: "Resume a paused goal without launching a worker. For a blocked continuous goal with a saved origin-host handoff and no worker objective, returns that handoff without queuing a rediscovery worker; execute the host step from the originating turn, then continue the same goal.", inputSchema: { type: "object", additionalProperties: false, required: ["goalId"], properties: { goalId } } },
     { name: "retry_failed_goal", description: "After an explicitly acknowledged failed iteration and a verified correction, queue one paused replacement under the same unfinished goal. This never launches a worker.", inputSchema: { type: "object", additionalProperties: false, required: ["goalId", "reason"], properties: { goalId, reason: { type: "string", minLength: 1 } } } },
     { name: "answer_goal", description: "Answer the durable approval question for a goal and queue its next bounded iteration without launching it.", inputSchema: { type: "object", additionalProperties: false, required: ["goalId", "answer"], properties: { goalId, answer: { type: "string", minLength: 1 } } } },

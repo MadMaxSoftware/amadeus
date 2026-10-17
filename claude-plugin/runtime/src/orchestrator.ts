@@ -53,7 +53,22 @@ export type WorkerContext = {
   progress?: (detail: WorkerProgress) => void;
   /** The previous iteration's patch that verification rejected; the recovery workspace starts with it applied. */
   seedPatch?: { path: string; sha256: string };
+  /**
+   * Call immediately before starting a model. False means the job was cancelled (for example, its goal
+   * was paused) and the worker must not call the model.
+   */
+  beginModelCall?: () => boolean;
 };
+
+/** A worker gave up before any model call because the job was cancelled. */
+export class CancelledBeforeModelCall extends Error {
+  constructor() { super("Cancelled before any model call: the goal was paused or stopped."); this.name = "CancelledBeforeModelCall"; }
+}
+
+/** Use before a model call: throws when the job was cancelled first. */
+export function assertModelCallAllowed(context: WorkerContext): void {
+  if (context.beginModelCall && !context.beginModelCall()) throw new CancelledBeforeModelCall();
+}
 
 export type WorkerProgress = {
   phase: "preparing" | "analysis" | "command" | "edit" | "research" | "reporting";
@@ -219,6 +234,7 @@ export class Orchestrator {
         goalId: claimed.goal_id ? String(claimed.goal_id) : null,
         goalIteration,
         ...(seedPatch ? { seedPatch } : {}),
+        beginModelCall: () => this.coordinator.beginModelCall(jobId),
         signal: controller.signal,
         heartbeat: () => { this.coordinator.heartbeat(jobId, workerName, leaseSeconds); },
         progress: (detail) => {
@@ -230,7 +246,10 @@ export class Orchestrator {
       // recorded an explicit stop request; otherwise preserve the real worker
       // failure/timeout outcome for reconciliation.
       if (this.coordinator.stopRequested(jobId, workerName)) {
-        this.coordinator.acknowledgeStopped(jobId, "Emergency termination acknowledged; outcome requires reconciliation.");
+        // Nothing is applied yet here; a job that never reached a model needs no reconciliation.
+        if (!this.coordinator.settleStopBeforeModelCall(jobId)) {
+          this.coordinator.acknowledgeStopped(jobId, "Emergency termination acknowledged; outcome requires reconciliation.");
+        }
         return this.coordinator.getJob(jobId);
       }
       if (result.usage && result.providerUsage) throw new Error("Worker returned conflicting usage receipts");
@@ -495,7 +514,9 @@ export class Orchestrator {
         }));
       }
       if (this.coordinator.stopRequested(jobId, workerName)) {
-        this.coordinator.acknowledgeStopped(jobId, "Emergency termination acknowledged; outcome requires reconciliation.");
+        if (patchApplied || !this.coordinator.settleStopBeforeModelCall(jobId)) {
+          this.coordinator.acknowledgeStopped(jobId, "Emergency termination acknowledged; outcome requires reconciliation.");
+        }
       } else if (error instanceof DefiniteWorkerFailure) {
         this.coordinator.finish(jobId, "failed", error.message);
       } else if (error instanceof UntrustedWorkerReceiptError) {

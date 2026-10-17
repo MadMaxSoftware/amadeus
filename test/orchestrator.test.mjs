@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Coordinator } from '../src/coordinator.ts';
-import { Orchestrator, STOP_POLL_FAILURE_LIMIT } from '../src/orchestrator.ts';
+import { assertModelCallAllowed, Orchestrator, STOP_POLL_FAILURE_LIMIT } from '../src/orchestrator.ts';
 
 const providerUsage = { provider: 'fake', model: null, sessionId: 'session', requestId: null, durationMs: null, durationApiMs: null,
   tokenUsageAvailable: false, inputTokens: null, cachedInputTokens: null, cacheWriteInputTokens: null, outputTokens: null,
@@ -105,4 +105,59 @@ test('a patch re-captured after the declared build step is the one applied and r
   assert.equal(job.status, 'completed');
   assert.deepEqual(applied, ['b'.repeat(64)]);
   assert.equal(String(coordinator.patchReceipts(String(job.id)).records[0].patch_sha256).toLowerCase(), 'b'.repeat(64));
+});
+
+test('pausing a goal whose job has not called a model yet requeues the job instead of leaving it uncertain', async (t) => {
+  const { coordinator, goalId, calls, checkpoint, applicator } = setup(t);
+  let modelCalls = 0;
+  const worker = { async run(context) {
+    // The owner pauses while the workspace is still being prepared.
+    coordinator.pauseGoal(goalId);
+    assertModelCallAllowed(context);
+    modelCalls += 1;
+    return { outcome: 'changed files', providerUsage, patch, goalDecision: continueDecision };
+  } };
+  const orchestrator = new Orchestrator(coordinator, worker, checkpoint, applicator, { stopPollIntervalMs: 20 });
+  const job = await orchestrator.runOnce(goalId);
+  assert.equal(job.status, 'queued');
+  assert.equal(modelCalls, 0);
+  assert.deepEqual(calls, { checkpoint: 0, apply: 0 });
+  const goal = coordinator.getGoal(goalId);
+  assert.equal(goal.status, 'paused');
+  assert.equal(String(goal.current_job_id), String(job.id));
+  assert.ok(coordinator.goalEvents(goalId).some((event) => event.kind === 'unstarted_iteration_requeued'));
+  // Resuming runs the same step normally.
+  coordinator.resumeGoal(goalId);
+  const resumedWorker = { async run(context) { assertModelCallAllowed(context); modelCalls += 1;
+    return { outcome: 'changed files', providerUsage, patch, goalDecision: continueDecision }; } };
+  const resumed = await new Orchestrator(coordinator, resumedWorker, checkpoint, applicator).runOnce(goalId);
+  assert.equal(String(resumed.id), String(job.id));
+  assert.equal(resumed.status, 'completed');
+  assert.equal(modelCalls, 1);
+});
+
+test('pausing after the model call started still drains the iteration', async (t) => {
+  const { coordinator, goalId, calls, checkpoint, applicator } = setup(t);
+  const worker = { async run(context) {
+    assertModelCallAllowed(context);
+    coordinator.pauseGoal(goalId);
+    return { outcome: 'changed files', providerUsage, patch, goalDecision: continueDecision };
+  } };
+  const job = await new Orchestrator(coordinator, worker, checkpoint, applicator, { stopPollIntervalMs: 20 }).runOnce(goalId);
+  assert.equal(job.status, 'completed');
+  assert.deepEqual(calls, { checkpoint: 1, apply: 1 });
+  assert.equal(coordinator.getGoal(goalId).status, 'paused');
+});
+
+test('stopping a goal before its job called a model fails the job cleanly, with nothing to reconcile', async (t) => {
+  const { coordinator, goalId, checkpoint, applicator } = setup(t);
+  const worker = { async run(context) {
+    coordinator.stopGoal(goalId, 'owner stopped');
+    assertModelCallAllowed(context);
+    return { outcome: 'changed files', providerUsage, patch, goalDecision: continueDecision };
+  } };
+  const job = await new Orchestrator(coordinator, worker, checkpoint, applicator, { stopPollIntervalMs: 20 }).runOnce(goalId);
+  assert.equal(job.status, 'failed');
+  assert.match(String(job.outcome), /before any model call/);
+  assert.equal(coordinator.getGoal(goalId).status, 'stopped');
 });

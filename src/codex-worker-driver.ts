@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { runCodexAsync, type CodexAdapterConfig } from "./codex-adapter.ts";
-import { DefiniteWorkerFailure, UntrustedWorkerReceiptError, type WorkerContext, type WorkerDriver, type WorkerResult } from "./orchestrator.ts";
+import { assertModelCallAllowed, DefiniteWorkerFailure, UntrustedWorkerReceiptError, type WorkerContext, type WorkerDriver, type WorkerResult } from "./orchestrator.ts";
 import { materializeWorkspace, materializeWritableWorkspacePaths } from "./worker-isolation.ts";
 import { parseCodexUsage } from "./usage-accounting.ts";
 import { parseGoalDecision } from "./goal-protocol.ts";
@@ -190,6 +190,7 @@ export class CodexWorkerDriver implements WorkerDriver {
         : "Prepared the isolated project workspace and verified its execution boundary." });
       let lastProgressAt = 0;
       let lastProgressSignature = "";
+      assertModelCallAllowed(context);
       const result = await runCodexAsync(config, workspace, objective + (seed?.guidance ?? "") + recoveryGuidance + ephemeralWorkerGuidance, reservation,
         AbortSignal.any([context.signal, leaseAbort.signal]), (line) => {
           let protocolComplete = false;

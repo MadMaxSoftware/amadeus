@@ -424,15 +424,80 @@ export class Coordinator {
     const goal = this.getGoal(id);
     if (goal.status !== "active") throw new Error("only an active goal can be paused");
     const timestamp = this.now();
-    this.db.prepare("UPDATE goals SET status='paused', updated_at=? WHERE id=?").run(timestamp, id);
-    if (goal.current_job_id) {
-      this.db.prepare(`
-        UPDATE jobs SET reservation_released_at=COALESCE(reservation_released_at, ?), updated_at=?
-        WHERE id=? AND status='queued'
-      `).run(timestamp, timestamp, String(goal.current_job_id));
-    }
-    this.goalEvent(id, "paused", { mode: "drain-current-iteration" });
+    // One transaction with beginModelCall, so a job is either cancelled before its model call or drained after it.
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE goals SET status='paused', updated_at=? WHERE id=?").run(timestamp, id);
+      let cancelledJobId: string | null = null;
+      if (goal.current_job_id) {
+        const jobId = String(goal.current_job_id);
+        this.db.prepare(`
+          UPDATE jobs SET reservation_released_at=COALESCE(reservation_released_at, ?), updated_at=?
+          WHERE id=? AND status='queued'
+        `).run(timestamp, timestamp, jobId);
+        // A just-claimed job that has not called a model yet is cancelled and requeued, not drained.
+        if (this.getJob(jobId).status === "running" && !this.modelCallStarted(jobId)) {
+          this.db.prepare("UPDATE jobs SET stop_requested=1, updated_at=? WHERE id=?").run(timestamp, jobId);
+          this.event(jobId, "stop_requested", { reason: "goal paused before any model call" });
+          cancelledJobId = jobId;
+        }
+      }
+      this.goalEvent(id, "paused", cancelledJobId
+        ? { mode: "cancel-unstarted-iteration", jobId: cancelledJobId }
+        : { mode: "drain-current-iteration" });
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     return this.getGoal(id);
+  }
+
+  private modelCallStarted(jobId: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM events WHERE job_id=? AND kind='model_call_started' LIMIT 1").get(jobId));
+  }
+
+  /**
+   * Called by a worker immediately before it starts a model. Records that the job can no longer be
+   * cancelled cleanly; returns false (and the worker must not call the model) when a stop is already requested.
+   */
+  beginModelCall(jobId: string): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const job = this.getJob(jobId);
+      const allowed = job.status === "running" && Number(job.stop_requested) !== 1;
+      if (allowed) this.event(jobId, "model_call_started", {});
+      this.db.exec("COMMIT");
+      return allowed;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  /**
+   * Settle a stopped job that never called a model, so it needs no reconciliation: a paused goal's job
+   * goes back to the queue, a stopped goal's job fails. Returns false when this does not apply.
+   */
+  settleStopBeforeModelCall(jobId: string): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const job = this.getJob(jobId);
+      const goal = job.goal_id ? this.getGoal(String(job.goal_id)) : null;
+      if (job.status !== "running" || Number(job.stop_requested) !== 1 || this.modelCallStarted(jobId)
+        || !goal || !["paused", "stopped"].includes(String(goal.status))) {
+        this.db.exec("COMMIT");
+        return false;
+      }
+      const timestamp = this.now();
+      if (goal.status === "paused") {
+        this.db.prepare(`UPDATE jobs SET status='queued', worker=NULL, heartbeat_at=NULL, lease_expires_at=NULL, stop_requested=0,
+          reservation_released_at=?, updated_at=? WHERE id=?`).run(timestamp, timestamp, jobId);
+        this.event(jobId, "requeued_before_model_call", { reason: "goal paused" });
+        this.goalEvent(String(goal.id), "unstarted_iteration_requeued", { jobId });
+      } else {
+        this.db.prepare(`UPDATE jobs SET status='failed', outcome=?, heartbeat_at=NULL, lease_expires_at=NULL, stop_requested=0,
+          reservation_released_at=?, updated_at=? WHERE id=?`)
+          .run("Goal stopped before any model call; nothing to reconcile.", timestamp, timestamp, jobId);
+        this.event(jobId, "stopped_before_model_call", {});
+      }
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
   resumeGoal(id: string): Record<string, unknown> {

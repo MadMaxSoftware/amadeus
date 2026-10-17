@@ -7,7 +7,7 @@ import {
   runCursorImplementation,
   type CursorAdapterConfig,
 } from "./cursor-adapter.ts";
-import { DefiniteWorkerFailure, UntrustedWorkerReceiptError, type WorkerContext, type WorkerDriver, type WorkerResult } from "./orchestrator.ts";
+import { assertModelCallAllowed, DefiniteWorkerFailure, UntrustedWorkerReceiptError, type WorkerContext, type WorkerDriver, type WorkerResult } from "./orchestrator.ts";
 import { materializeWorkspace, materializeWritableWorkspacePaths } from "./worker-isolation.ts";
 import { extractLeadingJsonObject, parseGoalDecision, type GoalDecision } from "./goal-protocol.ts";
 import { captureWorkerPatch, seedWorkspaceWithPatch } from "./worker-patch.ts";
@@ -191,6 +191,7 @@ export class CursorWorkerDriver implements WorkerDriver {
     try {
       let lastProgressAt = 0;
       let lastProgressSignature = "";
+      assertModelCallAllowed(context);
       const result = await this.runImplementation(
         config,
         workspace,

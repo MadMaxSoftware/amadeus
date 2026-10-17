@@ -7,7 +7,7 @@ import {
   runClaudeImplementation,
   type ClaudeAdapterConfig,
 } from "./claude-adapter.ts";
-import { DefiniteWorkerFailure, UntrustedWorkerReceiptError, type WorkerContext, type WorkerDriver, type WorkerResult } from "./orchestrator.ts";
+import { assertModelCallAllowed, DefiniteWorkerFailure, UntrustedWorkerReceiptError, type WorkerContext, type WorkerDriver, type WorkerResult } from "./orchestrator.ts";
 import { materializeWorkspace, materializeWritableWorkspacePaths } from "./worker-isolation.ts";
 import { parseGoalDecision } from "./goal-protocol.ts";
 import { captureWorkerPatch, seedWorkspaceWithPatch } from "./worker-patch.ts";
@@ -218,6 +218,7 @@ export class ClaudeWorkerDriver implements WorkerDriver {
           },
         },
       );
+      assertModelCallAllowed(context);
       let result = await runWith(config);
       // A tier alias Claude Code no longer accepts must not stop the goal: retry
       // once on Claude Code's own default model, before any work was done.
