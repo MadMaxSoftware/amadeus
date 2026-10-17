@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { materializeWorkspace } from '../src/worker-isolation.ts';
 import { buildCodexInvocation } from '../src/codex-adapter.ts';
+import { NEEDS_WORKER_WORKSPACE } from './helpers/scratch.mjs';
 
 function isolatedWorkspace(t) {
   const root = mkdtempSync(join(tmpdir(), 'amadeus-codex-network-'));
@@ -25,7 +26,7 @@ function permission(config, workspace) {
   return buildCodexInvocation(config, workspace, 'objective').find((arg) => arg.startsWith('permissions.'));
 }
 
-test('development Codex workers get command network access only when the owner opts in', (t) => {
+test('development Codex workers get command network access only when the owner opts in', { skip: NEEDS_WORKER_WORKSPACE }, (t) => {
   const { source, workspace } = isolatedWorkspace(t);
   const base = { executable: 'codex', model: null, reasoningEffort: 'low', windowsSandbox: 'mxc',
     permissionProfile: 'amadeus_task_worker', approvalPolicy: 'never', deniedSourceRoot: source,

@@ -9,6 +9,7 @@ import { captureWorkerPatch, seedWorkspaceWithPatch } from '../src/worker-patch.
 import { failureOutputTail } from '../src/deterministic-verifier.ts';
 import { Coordinator } from '../src/coordinator.ts';
 import { Orchestrator } from '../src/orchestrator.ts';
+import { NEEDS_WORKER_WORKSPACE } from './helpers/scratch.mjs';
 
 function project(t) {
   const root = mkdtempSync(join(tmpdir(), 'amadeus-recovery-seed-'));
@@ -34,7 +35,7 @@ function rejectedAttempt(t) {
   return { ...fixture, patch };
 }
 
-test('a recovery workspace starts with the rejected change and still passes the clean-workspace check', (t) => {
+test('a recovery workspace starts with the rejected change and still passes the clean-workspace check', { skip: NEEDS_WORKER_WORKSPACE }, (t) => {
   const { fresh, artifacts, patch } = rejectedAttempt(t);
   const workspace = fresh('w2');
   const seed = seedWorkspaceWithPatch(workspace, { path: patch.path, sha256: patch.sha256 });
@@ -51,7 +52,7 @@ test('a recovery workspace starts with the rejected change and still passes the 
   assert.deepEqual(next.changedPaths, ['a.txt', 'new.txt'], 'the recovery patch carries the original change too');
 });
 
-test('an unusable seed leaves a clean fresh copy and tells the worker so', (t) => {
+test('an unusable seed leaves a clean fresh copy and tells the worker so', { skip: NEEDS_WORKER_WORKSPACE }, (t) => {
   const { fresh, patch } = rejectedAttempt(t);
   const wrongHash = fresh('w2');
   assert.equal(seedWorkspaceWithPatch(wrongHash, { path: patch.path, sha256: 'F'.repeat(64) }).seeded, false);

@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Coordinator } from '../src/coordinator.ts';
 import { runStateBackupIfDue } from '../src/backup-policy.ts';
+import { scratchDir } from './helpers/scratch.mjs';
 
 test('state backups run at most once per local day and keep a bounded history', (t) => {
-  const root = mkdtempSync(join(tmpdir(), 'amadeus-backup-'));
+  const root = scratchDir('amadeus-backup-');
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const databasePath = join(root, 'coordinator.sqlite');
   const coordinator = new Coordinator(databasePath);
@@ -32,7 +32,7 @@ test('state backups run at most once per local day and keep a bounded history', 
 });
 
 test('a missing database is not an error', (t) => {
-  const root = mkdtempSync(join(tmpdir(), 'amadeus-backup-missing-'));
+  const root = scratchDir('amadeus-backup-missing-');
   t.after(() => rmSync(root, { recursive: true, force: true }));
   assert.deepEqual(runStateBackupIfDue({ databasePath: join(root, 'none.sqlite'), backupRoot: join(root, 'b') }), { created: null, removed: [] });
 });

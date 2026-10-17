@@ -11,6 +11,7 @@ import { claudeDevelopmentArguments } from '../src/claude-adapter.ts';
 import { buildCodexInvocation } from '../src/codex-adapter.ts';
 import { portableClaudeConfig } from '../src/portable-runtime.ts';
 import { materializeWorkspace } from '../src/worker-isolation.ts';
+import { NEEDS_WORKER_WORKSPACE } from './helpers/scratch.mjs';
 
 const catalog = { fetchedAt: 'fixture', models: [
   { slug: 'gpt-frontier', priority: 0, supportedEfforts: ['low', 'medium', 'high'] },
@@ -144,7 +145,7 @@ test('Claude development arguments: equal to Codex, no restricted mode, no user 
   assert.equal(off[off.indexOf('--allowedTools') + 1], off[off.indexOf('--tools') + 1]);
 });
 
-test('workerCommandsEnabled=false disables the Codex shell tool too', (t) => {
+test('workerCommandsEnabled=false disables the Codex shell tool too', { skip: NEEDS_WORKER_WORKSPACE }, (t) => {
   const root = mkdtempSync(join(tmpdir(), 'amadeus-commands-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const source = join(root, 'project');

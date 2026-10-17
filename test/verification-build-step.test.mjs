@@ -9,6 +9,7 @@ import { captureWorkerPatch } from '../src/worker-patch.ts';
 import { DeterministicVerifier } from '../src/deterministic-verifier.ts';
 import { readBuildStep, verificationCheckKind } from '../src/verification-checks.mjs';
 import { verificationDepth } from '../plugins/amadeus/scripts/completion-report.mjs';
+import { NEEDS_WORKER_WORKSPACE } from './helpers/scratch.mjs';
 
 function writeJson(path, value) {
   mkdirSync(join(path, '..'), { recursive: true });
@@ -43,7 +44,7 @@ const context = { jobId: 'job', attempt: 1, objective: 'o', reservedCredits: 0, 
   signal: new AbortController().signal, heartbeat() {} };
 const ok = { exitCode: 0, signal: null, timedOut: false, stdout: '', stderr: '' };
 
-test('the declared build step runs first and its generated files join the applied patch', async (t) => {
+test('the declared build step runs first and its generated files join the applied patch', { skip: NEEDS_WORKER_WORKSPACE }, async (t) => {
   const { workspace, patch, verifier } = fixture(t);
   const ran = [];
   const receipt = await verifier(async (_executable, args) => {
@@ -62,7 +63,7 @@ test('the declared build step runs first and its generated files join the applie
   assert.match(receipt.summary, /^Integrity check only/);
 });
 
-test('a failing build step blocks the patch before any other check', async (t) => {
+test('a failing build step blocks the patch before any other check', { skip: NEEDS_WORKER_WORKSPACE }, async (t) => {
   const { workspace, patch, verifier } = fixture(t);
   const receipt = await verifier(async (_executable, args) => args.join(' ').includes('build:gen')
     ? { ...ok, exitCode: 1, stderr: 'boom' } : ok).verify({ outcome: 'done', patch, workspacePath: workspace }, context);
@@ -72,7 +73,7 @@ test('a failing build step blocks the patch before any other check', async (t) =
   assert.match(receipt.summary, /npm run build:gen failed/);
 });
 
-test('the build step is read from the authoritative project, never the patched copy', (t) => {
+test('the build step is read from the authoritative project, never the patched copy', { skip: NEEDS_WORKER_WORKSPACE }, (t) => {
   const { project, workspace } = fixture(t);
   writeJson(join(workspace, '.amadeus', 'verify.json'), { schemaVersion: 1, build: 'evil', checks: [] });
   writeJson(join(workspace, 'package.json'), { scripts: { 'build:gen': 'node evil.mjs', evil: 'node evil.mjs' } });
