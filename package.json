@@ -49,7 +49,8 @@
     "workspace-diff-check": "set NODE_OPTIONS=&& (type scripts\\workspace-diff-check.mjs | node --input-type=module)",
     "test:state-consolidation:sandbox": "set NODE_OPTIONS=&& (type scripts\\run-state-consolidation-tests-sandbox.mjs | node --input-type=module)",
     "claude:worker-live-check": "node scripts/claude-worker-live-check.mjs",
-    "worker:sandbox-run": "node scripts/worker-sandbox-run.mjs"
+    "worker:sandbox-run": "node scripts/worker-sandbox-run.mjs",
+    "codex:worker-live-check": "node scripts/codex-worker-live-check.mjs"
   },
   "coordinator": {
     "verify": [

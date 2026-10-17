@@ -8,7 +8,7 @@ import { verifyWorkspace } from "./worker-isolation.ts";
 import { terminateWorkerTree } from "./worker-process.ts";
 import { isolationSecurityStateBinding } from "./isolation-security-state.ts";
 import { resolveMaximumIdleSeconds } from "./worker-timeouts.ts";
-import { withoutCredentials } from "./worker-environment.ts";
+import { developerToolEnvironment } from "./worker-environment.ts";
 import { developmentFilesystemPolicy, normalizeProjectScope as normalizeSharedProjectScope, normalizeWritableWorkspacePaths, stableWorkspaceChildren, writableParentChain, type ProjectScope } from "./worker-sandbox.ts";
 
 export type CodexAdapterConfig = {
@@ -353,7 +353,8 @@ export function runCodex(config: CodexAdapterConfig, workspace: string, objectiv
 
 /** Worker subprocesses must not inherit coordinator state/config authority. */
 export function isolatedWorkerEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { ...withoutCredentials(process.env), ...overrides };
+  // Host variables are allowlisted (see worker-environment.ts).
+  const environment: NodeJS.ProcessEnv = { ...developerToolEnvironment(process.env), ...overrides };
   for (const key of Object.keys(environment)) {
     if (key.startsWith("AMADEUS_")) delete environment[key];
   }

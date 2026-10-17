@@ -8,7 +8,7 @@ import { verifyWorkspace } from "./worker-isolation.ts";
 import { terminateWorkerTree } from "./worker-process.ts";
 import { WORKER_RUNTIME_DIRECTORY, workerRuntimeLayout } from "./worker-runtime-layout.ts";
 import { isolationSecurityStateBinding } from "./isolation-security-state.ts";
-import { withoutCredentials } from "./worker-environment.ts";
+import { developerToolEnvironment } from "./worker-environment.ts";
 import { assertNoWorkspaceReparsePoints, containedLaunch, denyByDefaultFilesystemPolicy, normalizeProjectScope as normalizeSharedProjectScope, normalizeWritableWorkspacePaths as normalizeSharedWritablePaths, workspacePermissionEntries, writableParentChain as sharedWritableParentChain } from "./worker-sandbox.ts";
 import { containedEnvelopeCore, containedSecurityBoundaryPaths, containedWriteReceiptChecks } from "./worker-receipts.ts";
 
@@ -233,7 +233,8 @@ export function buildCursorEnvironment(config: CursorAdapterConfig, configuratio
   const resolvedConfigurationDirectory = resolve(configurationDirectory);
   const temporaryDirectory = resolve(resolvedConfigurationDirectory, "tmp");
   const environment: NodeJS.ProcessEnv = {
-    ...withoutCredentials(process.env),
+    // Host variables are allowlisted (see worker-environment.ts).
+    ...developerToolEnvironment(process.env),
     CI: "1",
     AMADEUS_WORKER: '1',
     // Cursor's subscription login lives at %APPDATA%\Cursor\auth.json. Point
