@@ -4,12 +4,22 @@
  * can load this module via data: URLs without TypeScript stripping.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, extname, join, posix, resolve } from "node:path";
+import { dirname, extname, join, posix, resolve, win32 } from "node:path";
 
 const EVIDENCE_PATCH_EXCLUDES = [
   ":(exclude,glob)**/evidence/patches/**/*.diff",
   ":(exclude,glob)**/evidence/patches/**/*.patch",
 ];
+
+/**
+ * npm's CLI beside the running Node: next to node.exe on Windows, and in
+ * ../lib/node_modules on macOS and Linux installs.
+ */
+export function npmCliPath(nodeExecutable = process.execPath, exists = existsSync) {
+  const bin = dirname(nodeExecutable);
+  const candidates = [join(bin, "node_modules", "npm", "bin", "npm-cli.js"), join(bin, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")];
+  return candidates.find((candidate) => exists(candidate)) ?? candidates[0];
+}
 
 /**
  * Map `test/amadeus-updates-providers.test.mjs` →
@@ -28,11 +38,23 @@ export function resolveSandboxTestRunner(workspace, testPath) {
  * Build a PowerShell stdin-pipe check that never realpath()s the runner as an entry.
  * Clears host-injected NODE_OPTIONS (e.g. Cursor path-verifier --require under C:\)
  * so restricted Windows sandboxes that deny lstat('C:\\') can still start Node.
+ * macOS and Linux have no PowerShell; /bin/sh performs the same steps (enter
+ * the workspace, drop a shebang, pipe the source to Node), with the paths
+ * passed as arguments rather than spliced into the command text.
  */
-export function buildSandboxPipeCheck(runnerRelativePath, nodeExecutable = process.execPath, workspace = null) {
+export function buildSandboxPipeCheck(runnerRelativePath, nodeExecutable = process.execPath, workspace = null, platform = process.platform) {
   const runner = String(runnerRelativePath || "").replaceAll("\\", "/");
-  const runnerPath = workspace ? join(workspace, ...runner.split("/")) : runner;
-  const bootstrap = workspace ? `process.chdir(${JSON.stringify(resolve(workspace))});` : "";
+  if (platform !== "win32") {
+    return {
+      tool: "node",
+      command: `node run ${runner}`,
+      executable: "/bin/sh",
+      args: ["-c", 'cd "$1" && sed "1{/^#!/d;}" "$2" | NODE_OPTIONS= "$3" --input-type=module', "sh",
+        workspace ? resolve(workspace) : ".", runner, nodeExecutable],
+    };
+  }
+  const runnerPath = workspace ? win32.join(workspace, ...runner.split("/")) : runner;
+  const bootstrap = workspace ? `process.chdir(${JSON.stringify(win32.resolve(workspace))});` : "";
   const powershellBootstrap = `'${bootstrap.replaceAll("'", "''")}'`;
   const command = workspace ? [
     "$env:NODE_OPTIONS=''",
@@ -177,7 +199,7 @@ export function discoverVerificationChecks(workspace, changedPaths = [], options
   const seenPipeRunners = new Set(
     checks
       .map((check) => {
-        const match = /powershell pipe\s+(.+)$/i.exec(String(check.command || ""));
+        const match = /(?:powershell pipe|node run)\s+(.+)$/i.exec(String(check.command || ""));
         return match ? match[1].replaceAll("\\", "/") : null;
       })
       .filter(Boolean),
@@ -221,7 +243,7 @@ export function discoverVerificationChecks(workspace, changedPaths = [], options
           tool: "npm",
           command: "npm test",
           executable: process.execPath,
-          args: [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "test", "--", ...tests],
+          args: [npmCliPath(), "test", "--", ...tests],
         });
       } else if (!packageManager && tests.every((path) => {
         const source = readFileSync(join(workspace, ...path.split("/")), "utf8");
@@ -241,7 +263,7 @@ export function discoverVerificationChecks(workspace, changedPaths = [], options
       throw new Error(`Invalid coordinator verification script: ${name}`);
     }
     const check = npmScriptCheck(workspace, name, scripts[name]);
-    const runner = /powershell pipe\s+(.+)$/i.exec(check.command)?.[1];
+    const runner = /(?:powershell pipe|node run)\s+(.+)$/i.exec(check.command)?.[1];
     if (runner) {
       if (seenPipeRunners.has(runner)) continue;
       seenPipeRunners.add(runner);
@@ -264,7 +286,7 @@ function npmScriptCheck(workspace, name, scriptBody) {
     tool: "npm",
     command: `npm run ${name}`,
     executable: process.execPath,
-    args: [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "run", name],
+    args: [npmCliPath(), "run", name],
   };
 }
 

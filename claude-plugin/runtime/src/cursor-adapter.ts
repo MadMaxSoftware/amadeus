@@ -1,15 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { spawn, spawnSync } from "node:child_process";
 import { verifyWorkspace } from "./worker-isolation.ts";
-import { terminateWorkerTree } from "./worker-process.ts";
+import { terminateWorkerTree, WORKER_PROCESS_GROUP } from "./worker-process.ts";
 import { WORKER_RUNTIME_DIRECTORY, workerRuntimeLayout } from "./worker-runtime-layout.ts";
 import { isolationSecurityStateBinding } from "./isolation-security-state.ts";
 import { developerToolEnvironment } from "./worker-environment.ts";
-import { assertNoWorkspaceReparsePoints, containedLaunch, denyByDefaultFilesystemPolicy, normalizeProjectScope as normalizeSharedProjectScope, normalizeWritableWorkspacePaths as normalizeSharedWritablePaths, workspacePermissionEntries, writableParentChain as sharedWritableParentChain } from "./worker-sandbox.ts";
+import { assertWorkspaceOutsideProject, assertNoWorkspaceReparsePoints, containedLaunch, denyByDefaultFilesystemPolicy, normalizeProjectScope as normalizeSharedProjectScope, normalizeWritableWorkspacePaths as normalizeSharedWritablePaths, workspacePermissionEntries, writableParentChain as sharedWritableParentChain } from "./worker-sandbox.ts";
 import { containedEnvelopeCore, containedSecurityBoundaryPaths, containedWriteReceiptChecks } from "./worker-receipts.ts";
 
 export type CursorAdapterConfig = {
@@ -207,12 +207,7 @@ function assertSafeConfig(config: CursorAdapterConfig, workspace: string): strin
     && (!Array.isArray(config.executableArguments) || config.executableArguments.some((value) => typeof value !== "string" || !value)))) {
     throw new Error("Cursor executable must be absolute and launcher arguments must be nonempty strings");
   }
-  const deniedRoot = resolve(config.deniedSourceRoot);
-  const workspaceKey = resolvedWorkspace.toLowerCase();
-  const deniedKey = deniedRoot.toLowerCase();
-  if (workspaceKey === deniedKey || workspaceKey.startsWith(`${deniedKey}\\`)) {
-    throw new Error("Cursor workspace must not be inside the authoritative repository");
-  }
+  assertWorkspaceOutsideProject(resolvedWorkspace, config.deniedSourceRoot, "Cursor workspace must not be inside the authoritative repository");
   verifyWorkspace(resolvedWorkspace);
   assertNoWorkspaceReparsePoints(resolvedWorkspace, "Cursor");
   return resolvedWorkspace;
@@ -481,7 +476,7 @@ function spawnCursor(
     const writablePaths = config.readOnlyOnly ? [] : normalizeSharedWritablePaths(config.writableWorkspacePaths, { label: "Cursor", required: true });
     const launch = buildCursorContainmentLaunch(config, workspace, args, writablePaths, configurationDirectory);
     const child = effectiveSpawn(launch.executable, launch.args, {
-      cwd: launch.cwd, env: buildCursorEnvironment(config, configurationDirectory, workspace), shell: false, stdio: ["ignore", "pipe", "pipe"],
+      cwd: launch.cwd, env: buildCursorEnvironment(config, configurationDirectory, workspace), shell: false, stdio: ["ignore", "pipe", "pipe"], detached: WORKER_PROCESS_GROUP,
     });
     let stdout = "";
     let stderr = "";
@@ -661,5 +656,5 @@ function main(): void {
   throw new Error("Live Cursor execution is coordinator-only and remains disabled");
 }
 
-// pathToFileURL matches import.meta.url on every platform, including paths with spaces.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+// Compare real paths so a symlinked install location (macOS /var, /tmp) still starts.
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) main();
